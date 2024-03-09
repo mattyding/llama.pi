@@ -169,6 +169,11 @@ endif
 ###############################################################
 # make all the different target names.
 
+# linker flags
+ifndef LFLAGS
+	LFLAGS :=
+endif
+
 # put all .o from every source in <BUILD_DIR>
 prog_objs := $(patsubst %.c, $(BUILD_DIR)/%.o, $(PROGS))
 csrc_objs := $(patsubst %.c, $(BUILD_DIR)/%.o, $(C_SRC))
@@ -282,7 +287,7 @@ endif
 
 $(all_elf): %.elf: %.o %.d $(elf_objs) $(elf_deps) $(LINK_DEPS) $(LIBS)
 	@mkdir -p $(dir $@)
-	$(LD) $(START) $< $(elf_objs) -T $(MEMMAP) -o $@ $(LIBS)
+	$(LD) $(LFLAGS) $(START) $< $(elf_objs) -T $(MEMMAP) -o $@ $(LIBS)
 
 # every .elf gets disassembled into a .list.  use `-D` if
 # you want to see the C source. [Have an option?]
