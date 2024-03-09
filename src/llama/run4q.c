@@ -19,6 +19,14 @@
 // Globals
 int GS = 0; // group size global for quantization of the weights
 
+typedef struct {
+    int8_t a : 4;
+} int4_t ;
+
+typedef struct {
+    uint8_t a : 4;
+} uint4_t; 
+
 // ----------------------------------------------------------------------------
 // Transformer model
 
@@ -33,7 +41,7 @@ typedef struct {
 } Config;
 
 typedef struct {
-    int8_t* q;    // quantized values
+    int4_t* q;    // quantized values
     float* s; // scaling factors
 } QuantizedTensor;
 
@@ -97,8 +105,8 @@ void malloc_run_state(RunState* s, Config* p) {
     s->xb2 = kmalloc(p->dim * sizeof(float));
     s->hb = kmalloc(p->hidden_dim * sizeof(float));
     s->hb2 = kmalloc(p->hidden_dim * sizeof(float));
-    s->xq = (QuantizedTensor) { .q = kmalloc(p->dim * sizeof(int8_t)), .s = kmalloc(p->dim * sizeof(float)) };
-    s->hq = (QuantizedTensor) { .q = kmalloc(p->hidden_dim * sizeof(int8_t)), .s = kmalloc(p->hidden_dim * sizeof(float)) };
+    s->xq = (QuantizedTensor) { .q = kmalloc(p->dim * sizeof(int4_t)), .s = kmalloc(p->dim * sizeof(float)) };
+    s->hq = (QuantizedTensor) { .q = kmalloc(p->hidden_dim * sizeof(int4_t)), .s = kmalloc(p->hidden_dim * sizeof(float)) };
     s->q = kmalloc(p->dim * sizeof(float));
     s->k = kmalloc(kv_dim * sizeof(float));
     s->v = kmalloc(kv_dim * sizeof(float));
@@ -119,16 +127,15 @@ void malloc_run_state(RunState* s, Config* p) {
 
 void dequantize(QuantizedTensor *qx, float* x, int n) {
     for (int i = 0; i < n; i++) {
-        x[i] = qx->q[i] * qx->s[i / GS];
+        x[i] = (float)qx->q[i].a * qx->s[i / GS];
     }
 }
 
 void quantize(QuantizedTensor *qx, float* x, int n) {
     int num_groups = n / GS;
-    float Q_MAX = 127.0f;
+    float Q_MAX = 7.0f; // Maximum value for 4-bit signed integer
 
     for (int group = 0; group < num_groups; group++) {
-
         // find the max absolute value in the current group
         float wmax = 0.0;
         for (int i = 0; i < GS; i++) {
@@ -145,8 +152,13 @@ void quantize(QuantizedTensor *qx, float* x, int n) {
         // calculate and write the quantized values
         for (int i = 0; i < GS; i++) {
             float quant_value = x[group * GS + i] / scale; // scale
-            int8_t quantized = (int8_t) round(quant_value); // round and clamp
-            qx->q[group * GS + i] = quantized;
+
+            // clamp to [-8, 7] range
+            int clamped_value = round(quant_value); // round
+            clamped_value = clamped_value > 7 ? 7 : clamped_value; // clamp
+            clamped_value = clamped_value < -8 ? -8 : clamped_value; // clamp
+
+            qx->q[group * GS + i].a = clamped_value;
         }
     }
 }
@@ -156,9 +168,9 @@ QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each) {
     void *p = *ptr;
     QuantizedTensor *res = kmalloc(n * sizeof(QuantizedTensor));
     for(int i=0; i<n; i++) {
-        /* map quantized int8 values*/
-        res[i].q = (int8_t*)p;
-        p = (int8_t*)p + size_each;
+        /* map quantized int4 values*/
+        res[i].q = (int4_t*)p;
+        p = (int4_t*)p + size_each;
         /* map scale factors */
         res[i].s = (float*)p;
         p = (float*)p + size_each / GS;
@@ -166,7 +178,6 @@ QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each) {
     *ptr = p; // advance ptr to current position
     return res;
 }
-
 void memory_map_weights(TransformerWeights *w, Config* p, void* ptr, uint8_t shared_classifier) {
     int head_size = p->dim / p->n_heads;
     // first are the parameters that are kept in fp32 (the rmsnorm (1D) weights)
@@ -943,6 +954,10 @@ void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
 #ifndef TESTING
 
 void notmain(void) {
+    // ARM doesn't support INT4 so upcasts to INT8
+    assert(sizeof(int4_t) == 1);
+    assert(sizeof(uint4_t) == 1);
+
     // parameter validation/overrides
     if (rng_seed <= 0) rng_seed = (unsigned int)time(NULL);
     if (temperature < 0.0) temperature = 0.0;
