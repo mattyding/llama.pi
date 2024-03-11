@@ -1,17 +1,4 @@
-"""
-from karpathy's llama2.c (export.py)
-INT4 serialization support added by me
-I also removed extraneous functions
-
-We serialize the llama models to a custom .bin format to be read from C.
-This is less optimized than the ggml's gguf format, but comes at the benefit of simplicitly.
-
-v0: legacy llama2.c float format, DEPRECATED
-v1: float32 export
-v2: int8 quantized Q8_0 export, similar to llama.cpp, in groups
-v3: int4 quantized Q4_0 export, similar to llama.cpp, in groups
-"""
-
+# modification of export.py that splits into multiple files
 import os
 import gzip
 import shutil
@@ -26,8 +13,8 @@ from torch import nn
 
 from model import ModelArgs, Transformer
 
-# -----------------------------------------------------------------------------
-# common utilities
+
+# --- utilities
 
 
 def serialize_fp32(file, tensor):
@@ -71,113 +58,17 @@ def quantize_q80(w, group_size):
     return int8val, scale, maxerr
 
 
-# NOTE: this requires a custom deserialize function in C
-def serialize_int4(file, tensor):
-    """writes one int4 tensor to file that is open in wb mode"""
-    d = tensor.detach().cpu().view(-1).numpy().astype(np.int8)
-    # Convert int4 values to int8 by packing two int4 values into one int8
-    d = np.right_shift(d.astype(np.int8), 4) + np.left_shift(
-        np.bitwise_and(d, 0x0F), 4
-    ).astype(np.int8)
-    b = struct.pack(f"{len(d)}b", *d)
-    file.write(b)
-
-
-def quantize_q40(w, group_size):
+# --- export fns
+def q80_export(model, out_dir, group_size=64):
     """
-    takes a tensor and returns the Q4_0 quantized version
-    i.e. symmetric quantization into int4, range [-7, 7]
-    """
-    assert w.numel() % group_size == 0
-    ori_shape = w.shape
-    w = w.float()  # convert to float32
-    w = w.reshape(-1, group_size)  # find the max in each group
-    wmax = torch.abs(w).max(dim=1).values
-    # calculate the scaling factor such that float = quant * scale
-    scale = wmax / 7.0  # scale into range [-7, 7]
-    quant = w / scale[:, None]  # round to nearest integer
-    int4val = torch.round(quant).to(torch.int8)
-    int4val = torch.clamp(int4val, -7, 7)  # clamp to [-7, 7] range
-    # dequantize by rescaling
-    fp32val = (int4val.float() * scale[:, None]).view(-1)
-    fp32valr = fp32val.reshape(-1, group_size)
-    # calculate the max error in each group
-    err = torch.abs(fp32valr - w).max(dim=1).values
-    # find the max error across all groups
-    maxerr = err.max().item()
-    return int4val, scale, maxerr
-
-
-# -----------------------------------------------------------------------------
-# new version
-
-
-def version1_export(model, filepath):
-    """
-    Export the model weights in full float32 .bin file to be read from C.
-    This is same as legacy_export, but with a proper header.
-    """
-    version = 1
-
-    out_file = open(filepath, "wb+")
-    # first write out the header. the header will be 256 bytes
-    # 1) write magic, which will be uint32 of "ak42" in ASCII
-    out_file.write(struct.pack("I", 0x616B3432))
-    # 2) write version, which will be int
-    out_file.write(struct.pack("i", version))
-    # 3) write the params, which will be 7 ints
-    p = model.params
-    hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
-    n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
-    header = struct.pack(
-        "iiiiiii",
-        p.dim,
-        hidden_dim,
-        p.n_layers,
-        p.n_heads,
-        n_kv_heads,
-        p.vocab_size,
-        p.max_seq_len,
-    )
-    out_file.write(header)
-    # 4) write some other flags
-    shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
-    out_file.write(struct.pack("B", int(shared_classifier)))
-    pad = 256 - out_file.tell()  # pad rest with zeros; tell returns current pos
-    assert pad >= 0
-    out_file.write(b"\0" * pad)
-
-    # now let's write out all the params
-    weights = [
-        *[layer.attention_norm.weight for layer in model.layers],
-        *[layer.ffn_norm.weight for layer in model.layers],
-        model.norm.weight,
-        model.tok_embeddings.weight,
-        *[layer.attention.wq.weight for layer in model.layers],
-        *[layer.attention.wk.weight for layer in model.layers],
-        *[layer.attention.wv.weight for layer in model.layers],
-        *[layer.attention.wo.weight for layer in model.layers],
-        *[layer.feed_forward.w1.weight for layer in model.layers],
-        *[layer.feed_forward.w2.weight for layer in model.layers],
-        *[layer.feed_forward.w3.weight for layer in model.layers],
-    ]
-    if not shared_classifier:
-        weights.append(model.output.weight)
-    for w in weights:
-        serialize_fp32(out_file, w)
-
-    # write to binary file
-    out_file.close()
-    print(f"wrote {filepath}")
-
-
-def version2_export(model, filepath, group_size=64):
-    """
-    Export the model weights in Q8_0 into .bin file to be read from C.
-    That is:
-    - quantize all weights to symmetric int8, in range [-127, 127]
-    - all other tensors (the rmsnorm params) are kept and exported in fp32
-    - quantization is done in groups of group_size to reduce the effects of any outliers
+    Export Q8_0 model weights into .bin files to be read from C. Each layer is exported into a separate file.
+       That is:
+       - quantize all weights to symmetric int8, in range [-127, 127]
+       - all other tensors (the rmsnorm params) are kept and exported in fp32
+       - quantization is done in groups of group_size to reduce the effects of any outliers
+    File format:
+    - header: 8 bytes
+        - magic: uint32 of "ak80" in ASCII
     """
     version = 2
 
@@ -185,192 +76,137 @@ def version2_export(model, filepath, group_size=64):
     while model.params.dim % group_size != 0:
         group_size //= 2
         print(f"BACKOFF: reducing group size to {group_size} to fit hidden_dim")
-    weights = [
-        model.tok_embeddings.weight,
-        *[layer.attention.wq.weight for layer in model.layers],
-        *[layer.attention.wk.weight for layer in model.layers],
-        *[layer.attention.wv.weight for layer in model.layers],
-        *[layer.attention.wo.weight for layer in model.layers],
-        *[layer.feed_forward.w1.weight for layer in model.layers],
-        *[layer.feed_forward.w2.weight for layer in model.layers],
-        *[layer.feed_forward.w3.weight for layer in model.layers],
-    ]
     shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
-    if not shared_classifier:
-        weights.append(model.output.weight)
-    for w in weights:
-        assert (
-            w.numel() % group_size == 0
-        ), f"weight {i} has numel {w.numel()}, not a multiple of group_size {group_size}"
 
-    # write
-    out_file = open(filepath, "wb+")
-    # first write out the header. the header will be 256 bytes
-    # 1) write magic, which will be uint32 of "ak42" in ASCII
-    out_file.write(struct.pack("I", 0x616B3432))
-    # 2) write version, which will be int
-    out_file.write(struct.pack("i", version))
-    # 3) write the params, which will be 7 ints
-    p = model.params
-    hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
-    n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
-    header = struct.pack(
-        "iiiiiii",
-        p.dim,
-        hidden_dim,
-        p.n_layers,
-        p.n_heads,
-        n_kv_heads,
-        p.vocab_size,
-        p.max_seq_len,
-    )
-    out_file.write(header)
-    # 4) write some other flags
-    out_file.write(struct.pack("B", int(shared_classifier)))
-    out_file.write(struct.pack("i", group_size))  # group size used for quantization
-    pad = 256 - out_file.tell()  # pad rest with zeros; tell returns current pos
-    assert pad >= 0
-    out_file.write(b"\0" * pad)
-    # now that the header is done, let's write out the model
-
-    # first let's write out all the params that we are keeping in fp32: the norms
-    for layer in model.layers:  # attention norms
-        serialize_fp32(out_file, layer.attention_norm.weight)
-    for layer in model.layers:  # MLP norms
-        serialize_fp32(out_file, layer.ffn_norm.weight)
-    serialize_fp32(out_file, model.norm.weight)  # final pre-classifier norm
-
-    # now let's write out all the params that we are quantizing to Q8_0
-    # note we skip classifier weights, which are shared with the embedding
-    ew = []
-    for i, w in enumerate(weights):
-        # quantize this weight
-        q, s, err = quantize_q80(w, group_size)
-        # save the int8 weights to file
-        serialize_int8(out_file, q)  # save the tensor in int8
-        serialize_fp32(out_file, s)  # save scale factors
-        # logging
-        ew.append((err, w.shape))
-        print(
-            f"{i+1}/{len(weights)} quantized {tuple(w.shape)} to Q8_0 with max error {err}"
+    os.makedirs(out_dir, exist_ok=True)
+    # write config file (256 bytes)
+    with open(out_dir + "/config.bin", "wb+") as f:
+        # 1) write magic, which will be uint32 of "ak80" in ASCII
+        f.write(struct.pack("I", 0x616B3830))
+        # 2) write version, which will be int
+        f.write(struct.pack("i", version))
+        # 3) write the params, which will be 7 ints
+        p = model.params
+        hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
+        n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
+        header = struct.pack(
+            "iiiiiii",
+            p.dim,
+            hidden_dim,
+            p.n_layers,
+            p.n_heads,
+            n_kv_heads,
+            p.vocab_size,
+            p.max_seq_len,
         )
+        f.write(header)
+        # 4) write some other flags
+        f.write(struct.pack("B", int(shared_classifier)))
+        f.write(struct.pack("i", group_size))  # group size used for quantization
+        pad = 256 - f.tell()  # pad rest with zeros; tell returns current pos
+        assert pad >= 0
+        f.write(b"\0" * pad)
+
+    ew = []
+
+    # write the weights for each layer into a separate .bin file
+    for i, layer in enumerate(model.layers):
+        # quantize weights
+        q80_wq, scale_wq, maxerr_wq = quantize_q80(
+            layer.attention.wq.weight, group_size
+        )
+        q80_wk, scale_wk, maxerr_wk = quantize_q80(
+            layer.attention.wk.weight, group_size
+        )
+        q80_wv, scale_wv, maxerr_wv = quantize_q80(
+            layer.attention.wv.weight, group_size
+        )
+        q80_wo, scale_wo, maxerr_wo = quantize_q80(
+            layer.attention.wo.weight, group_size
+        )
+        q80_ff1, scale_ff1, maxerr_ff1 = quantize_q80(
+            layer.feed_forward.w1.weight, group_size
+        )
+        q80_ff2, scale_ff2, maxerr_ff2 = quantize_q80(
+            layer.feed_forward.w2.weight, group_size
+        )
+        q80_ff3, scale_ff3, maxerr_ff3 = quantize_q80(
+            layer.feed_forward.w3.weight, group_size
+        )
+        # write to file
+        with open(f"{out_dir}/layer{i}.bin", "wb+") as f:
+            # 16-byte header
+            # 1) magic: uint32 of "ak80" in ASCII
+            f.write(struct.pack("I", 0x616B3830))
+            # 2) layer id: int
+            f.write(struct.pack("i", i))
+            # 3) padding: 8 bytes
+            f.write(b"\0" * 8)
+
+            # fp32 weights
+            serialize_fp32(f, layer.attention_norm.weight)
+            serialize_fp32(f, layer.ffn_norm.weight)
+            # q80 weights (int8) and scale (fp32)
+            serialize_int8(f, q80_wq)
+            serialize_fp32(f, scale_wq)
+            serialize_int8(f, q80_wk)
+            serialize_fp32(f, scale_wk)
+            serialize_int8(f, q80_wv)
+            serialize_fp32(f, scale_wv)
+            serialize_int8(f, q80_wo)
+            serialize_fp32(f, scale_wo)
+            serialize_int8(f, q80_ff1)
+            serialize_fp32(f, scale_ff1)
+            serialize_int8(f, q80_ff2)
+            serialize_fp32(f, scale_ff2)
+            serialize_int8(f, q80_ff3)
+            serialize_fp32(f, scale_ff3)
+
+            # append max errors
+            ew.append((maxerr_wq, layer.attention.wq.weight.shape))
+            ew.append((maxerr_wk, layer.attention.wk.weight.shape))
+            ew.append((maxerr_wv, layer.attention.wv.weight.shape))
+            ew.append((maxerr_wo, layer.attention.wo.weight.shape))
+            ew.append((maxerr_ff1, layer.feed_forward.w1.weight.shape))
+            ew.append((maxerr_ff2, layer.feed_forward.w2.weight.shape))
+            ew.append((maxerr_ff3, layer.feed_forward.w3.weight.shape))
+
+            # logging
+            print(
+                f"Layer {i}: max errors: wq={maxerr_wq}, wk={maxerr_wk}, wv={maxerr_wv}, wo={maxerr_wo}, ff1={maxerr_ff1}, ff2={maxerr_ff2}, ff3={maxerr_ff3}"
+            )
+
+    # write the output weights
+    if not shared_classifier:
+        q80_output, scale_output, maxerr_output = quantize_q80(
+            model.output.weight, group_size
+        )
+        with open(f"{out_dir}/output.bin", "wb+") as f:
+            # 16-byte header
+            # 1) magic: uint32 of "ak80" in ASCII
+            f.write(struct.pack("I", 0x616B3830))
+            # 2) padding: 12 bytes
+            f.write(b"\0" * 12)
+            serialize_fp32(f, model.output.weight)
+            serialize_int8(f, q80_output)
+            serialize_fp32(f, scale_output)
+            ew.append((maxerr_output, model.output.weight.shape))
+
+    # write final rmsnorm weights
+    with open(f"{out_dir}/norm.bin", "wb+") as f:
+        # 16-byte header
+        # 1) magic: uint32 of "ak80" in ASCII
+        f.write(struct.pack("I", 0x616B3830))
+        # 2) padding: 12 bytes
+        f.write(b"\0" * 12)
+        serialize_fp32(f, model.norm.weight)
 
     # print the highest error across all weights, should be very small, e.g. O(~0.001)
     ew.sort(reverse=True)
     print(f"max quantization group error across all weights: {ew[0][0]}")
 
-    # write to binary file
-    out_file.close()
-    print(f"wrote {filepath}")
 
-
-def version3_export(model, filepath, group_size=64):
-    """
-    Export the model weights in Q4_0 into .bin file to be read from C. That is:
-    - quantize all weights to symmetric int4, in range [-7, 7]
-    - all other tensors (the rmsnorm params) are kept and exported in fp32
-    - quantization is done in groups of group_size to reduce the effects of any outliers
-    """
-    version = 3  # let's first do some validation for this export type
-    while model.params.dim % group_size != 0:
-        group_size //= 2
-    print(f"BACKOFF: reducing group size to {group_size} to fit hidden_dim")
-    weights = [
-        model.tok_embeddings.weight,
-        *[layer.attention.wq.weight for layer in model.layers],
-        *[layer.attention.wk.weight for layer in model.layers],
-        *[layer.attention.wv.weight for layer in model.layers],
-        *[layer.attention.wo.weight for layer in model.layers],
-        *[layer.feed_forward.w1.weight for layer in model.layers],
-        *[layer.feed_forward.w2.weight for layer in model.layers],
-        *[layer.feed_forward.w3.weight for layer in model.layers],
-    ]
-    shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
-    if not shared_classifier:
-        weights.append(model.output.weight)
-    for w in weights:
-        assert (
-            w.numel() % group_size == 0
-        ), f"weight {i} has numel {w.numel()}, not a multiple of group_size {group_size}"
-    # write
-    out_file = open(filepath, "wb+")
-    # first write out the header. the header will be 256 bytes
-    # 1) write magic, which will be uint32 of "ak42" in ASCII
-    out_file.write(struct.pack("I", 0x616B3432))
-    # 2) write version, which will be int
-    out_file.write(struct.pack("i", version))
-    # 3) write the params, which will be 7 ints
-    p = model.params
-    hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
-    n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
-    header = struct.pack(
-        "iiiiiii",
-        p.dim,
-        hidden_dim,
-        p.n_layers,
-        p.n_heads,
-        n_kv_heads,
-        p.vocab_size,
-        p.max_seq_len,
-    )
-    out_file.write(header)
-    # 4) write some other flags
-    out_file.write(struct.pack("B", int(shared_classifier)))
-    out_file.write(struct.pack("i", group_size))
-    # group size used for quantization
-    pad = 256 - out_file.tell()  # pad rest with zeros; tell returns current pos
-    assert pad >= 0
-    out_file.write(b"\0" * pad)
-    # now that the header is done, let's write out the model
-    # first let's write out all the params that we are keeping in fp32: the norms
-    for layer in model.layers:
-        # attention norms
-        serialize_fp32(out_file, layer.attention_norm.weight)
-    for layer in model.layers:
-        # MLP norms
-        serialize_fp32(out_file, layer.ffn_norm.weight)
-    serialize_fp32(out_file, model.norm.weight)  # final pre-classifier norm
-    # now let's write out all the params that we are quantizing to Q4_0
-    # note we skip classifier weights, which are shared with the embedding
-    ew = []
-    for i, w in enumerate(weights):
-        # quantize this weight
-        q, s, err = quantize_q40(w, group_size)  # Changed to quantize_q40
-        # save the int4 weights to file
-        serialize_int4(out_file, q)  # Changed to serialize_int4
-        # save the tensor in int4
-        serialize_fp32(out_file, s)  # save scale factors
-        # logging
-        ew.append((err, w.shape))
-        print(
-            f"{i+1}/{len(weights)} quantized {tuple(w.shape)} to Q4_0 with max error {err}"
-        )
-    # print the highest error across all weights, should be very small, e.g. O(~0.001)
-    ew.sort(reverse=True)
-    print(f"max quantization group error across all weights: {ew[0][0]}")
-    # write to binary file
-    out_file.close()
-    print(f"wrote {filepath}")
-
-
-# -----------------------------------------------------------------------------
-# Load / import functions
-
-
-def load_checkpoint(checkpoint):
-
-    # load the provided model checkpoint
-    checkpoint_dict = torch.load(checkpoint, map_location="cpu")
-    gptconf = ModelArgs(**checkpoint_dict["model_args"])
-    model = Transformer(gptconf)
-    state_dict = checkpoint_dict["model"]
-    unwanted_prefix = "_orig_mod."
-    for k, v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-    model.load_state_dict(state_dict, strict=False)
-    model.eval()
-    return model
+# --- load model
 
 
 def load_meta_model(model_path):
@@ -455,55 +291,22 @@ def load_meta_model(model_path):
     return model
 
 
-# -----------------------------------------------------------------------------
-# API entrypoint
-
-
-def model_export(model, filepath, version, dtype=torch.float32):
-    """
-    Versions docs:
-    v-1:huggingface export, i.e. intended for use outside of this repo, in HF
-    v0: legacy llama2.c float format, DEPRECATED
-    v1: float32 export
-    v2: int8 quantized Q8_0 export, similar to llama.cpp, in groups
-    # TODO: add dtype export support for other versions (?)
-    """
-    if version == 1:
-        version1_export(model, filepath)
-    elif version == 2:
-        version2_export(model, filepath)
-    elif version == 3:
-        version3_export(model, filepath)
-    else:
-        raise ValueError(f"unknown version {version}")
-
-
-# -----------------------------------------------------------------------------
-# CLI entrypoint
-
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("filepath", type=str, help="the output filepath")
-    parser.add_argument(
-        "--version", default=0, type=int, help="the version to export with"
-    )
+    parser.add_argument("--model", type=str, help="model path")
+    parser.add_argument("--out_dir", type=str, help="the output dir")
+    parser.add_argument("--version", default=2, type=int, help="v2 == q80")
     parser.add_argument(
         "--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32"
     )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--checkpoint", type=str, help="model checkpoint, .pt file")
-    group.add_argument("--meta-llama", type=str, help="meta llama model path")
     args = parser.parse_args()
     dtype = {"fp16": torch.float16, "fp32": torch.float32}[args.dtype]
 
-    if args.checkpoint:
-        model = load_checkpoint(args.checkpoint)
-    elif args.meta_llama:
-        model = load_meta_model(args.meta_llama)
+    model = load_meta_model(args.model)
 
     if model is None:
         parser.error("Can't load input model!")
 
     # export
-    model_export(model, args.filepath, args.version, args.dtype)
+    if args.version == 2:
+        q80_export(model, args.out_dir)
