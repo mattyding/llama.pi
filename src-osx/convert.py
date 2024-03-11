@@ -79,7 +79,7 @@ def q80_export(model, out_dir, group_size=64):
     shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
 
     os.makedirs(out_dir, exist_ok=True)
-    # write config file (256 bytes)
+    # write config file
     with open(out_dir + "/config.bin", "wb+") as f:
         # 1) write magic, which will be uint32 of "ak80" in ASCII
         f.write(struct.pack("I", 0x616B3830))
@@ -101,11 +101,8 @@ def q80_export(model, out_dir, group_size=64):
         )
         f.write(header)
         # 4) write some other flags
-        f.write(struct.pack("B", int(shared_classifier)))
+        f.write(struct.pack("i", int(shared_classifier)))
         f.write(struct.pack("i", group_size))  # group size used for quantization
-        pad = 256 - f.tell()  # pad rest with zeros; tell returns current pos
-        assert pad >= 0
-        f.write(b"\0" * pad)
 
     ew = []
 

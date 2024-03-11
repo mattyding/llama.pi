@@ -1,5 +1,9 @@
 // The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
+// implementation ported from llama2.c with some modifications to work with r/pi
+
 #include "rpi.h"
+
+# define NULL ((void *)0)
 
 typedef struct {
     char *str;
@@ -15,11 +19,109 @@ typedef struct {
     unsigned char byte_pieces[512]; // stores all single-byte strings
 } Tokenizer;
 
+// --- algo helpers ---
+
+// called in decode
+char *parse_raw_byte_token(Tokenizer* t, char *piece) {
+    // original code had the following sscanf call:
+    //   if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1)...
+    // we don't have sscanf/libc so we make do manually
+    unsigned char byte_val = 0;
+    char* p = piece + 3;  // Start parsing after '<0x'
+    while (*p) {
+        char c = *p;
+        if (c >= '0' && c <= '9') {
+            byte_val = (byte_val << 4) + (c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            byte_val = (byte_val << 4) + (c - 'A' + 10);
+        } else if (c >= 'a' && c <= 'f') {
+            byte_val = (byte_val << 4) + (c - 'a' + 10);
+        } else {
+            break;
+        }
+        p++;
+    }
+    if (*p == '>') {
+        piece = (char*)t->byte_pieces + byte_val * 2;
+    }
+    return piece;
+}
+
+// called in str_lookup
+// src: https://github.com/gcc-mirror/gcc/blob/master/libiberty/bsearch.c
+void * bsearch (const void *key, const void *base0,
+         size_t nmemb, size_t size,
+         int (*compar)(const void *, const void *)) {
+	const char *base = (const char *) base0;
+	int lim, cmp;
+	const void *p;
+
+	for (lim = nmemb; lim != 0; lim >>= 1) {
+		p = base + (lim >> 1) * size;
+		cmp = (*compar)(key, p);
+		if (cmp == 0)
+			return (void *)p;
+		if (cmp > 0) {	/* key > p: move right */
+			base = (const char *)p + size;
+			lim--;
+		} /* else move left */
+	}
+	return NULL;
+}
+
+// basic sorting function implementation
+// qsort import fails ("undefined reference to `__aeabi_uidiv'") so here is a suboptimal but working algo
+// called in encode
+
+#if 0
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
+    // personally avoiding kmalloc calls b/c can't free
+    // can potentially lead to horrible memory corruption. unsure... we will see...
+    char *arr = (char *)base;
+    size_t i, j, min_idx;
+    char temp;
+
+    for (i = 0; i < nmemb - 1; i++) {
+        min_idx = i;
+        for (j = i + 1; j < nmemb; j++) {
+            if (compar(arr + j * size, arr + min_idx * size) < 0) {
+                min_idx = j;
+            }
+        }
+        if (min_idx != i) {
+            // Swap elements at i and min_idx
+            for (j = 0; j < size; j++) {
+                temp = arr[i * size + j];
+                arr[i * size + j] = arr[min_idx * size + j];
+                arr[min_idx * size + j] = temp;
+            }
+        }
+    }
+}
+#endif
+
+// backup qsort with malloc
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
+    char *arr = (char *)base;
+    char *temp = kmalloc(size);
+    for (size_t i = 0; i < nmemb - 1; i++) {
+        for (size_t j = i + 1; j < nmemb; j++) {
+            if (compar(arr + i * size, arr + j * size) > 0) {
+                memcpy(temp, arr + i * size, size);
+                memcpy(arr + i * size, arr + j * size, size);
+                memcpy(arr + j * size, temp, size);
+            }
+        }
+    }
+}
+
+// --- tokenizer functions ---
+
 int compare_tokens(const void *a, const void *b) {
     return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
-void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
+void build_tokenizer(Tokenizer* t, void *tokenizer_data, int vocab_size) {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
     // malloc space to hold the scores and the strings
@@ -30,32 +132,23 @@ void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
         t->byte_pieces[i * 2] = (unsigned char)i;
         t->byte_pieces[i * 2 + 1] = '\0';
     }
+    // first int is max_token len. read this value in
+    t->max_token_length = *(int*)tokenizer_data;
+    tokenizer_data += sizeof(int);
     // read in the file
-    FILE *file = fopen(tokenizer_path, "rb");
-    if (!file) { panic("couldn't load %s\n", tokenizer_path); }
-    if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { panic("failed read\n"); }
     int len;
     for (int i = 0; i < vocab_size; i++) {
-        if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) { panic("failed read\n"); }
-        if (fread(&len, sizeof(int), 1, file) != 1) { panic("failed read\n"); }
-        t->vocab[i] = (char *)kmalloc(len + 1);
-        if (fread(t->vocab[i], len, 1, file) != 1) { panic("failed read\n"); }
+        memcpy(t->vocab_scores + i, tokenizer_data, sizeof(float));
+        tokenizer_data += sizeof(float);
+        memcpy(&len, tokenizer_data, sizeof(int));
+        // sanity checking so we don't boom the heap
+        if (len > 1024) { panic("token of size %u too long\n", len); }
+        tokenizer_data += sizeof(int);
+        t->vocab[i] = (char*)kmalloc(len + 1);
+        memcpy(t->vocab[i], tokenizer_data, len);
         t->vocab[i][len] = '\0'; // add the string terminating token
+        tokenizer_data += len;
     }
-    fclose(file);
-}
-
-char* decode(Tokenizer* t, int prev_token, int token) {
-    char *piece = t->vocab[token];
-    // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
-    if (prev_token == 1 && piece[0] == ' ') { piece++; }
-    // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
-    // parse this and convert and return the actual byte
-    unsigned char byte_val;
-    if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
-        piece = (char*)t->byte_pieces + byte_val * 2;
-    }
-    return piece;
 }
 
 void safe_printk(char *piece) {
@@ -65,11 +158,24 @@ void safe_printk(char *piece) {
     if (piece[0] == '\0') { return; }
     if (piece[1] == '\0') {
         unsigned char byte_val = piece[0];
-        if (!(isprint(byte_val) || isspace(byte_val))) {
-            return; // bad byte, don't print it
+        // ascii in this range are non-printable control codes
+        if (byte_val < 32 || (byte_val >= 127 && byte_val <= 159)) {
+            return;
         }
     }
     printk("%s", piece);
+}
+
+char* decode(Tokenizer* t, int prev_token, int token) {
+    char *piece = t->vocab[token];
+    // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
+    if (prev_token == 1 && piece[0] == ' ') { piece++; }
+    // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
+    // parse this and convert and return the actual byte
+    if (piece[0] == '<' && piece[1] == '0' && piece[2] == 'x') {
+        return parse_raw_byte_token(t, piece);
+    }
+    return piece;
 }
 
 int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
@@ -171,7 +277,7 @@ void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *
 
         for (int i=0; i < (*n_tokens-1); i++) {
             // check if we can merge the pair (tokens[i], tokens[i+1])
-            sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
+            snprintk(str_buffer, t->max_token_length * 2, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
             int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
             if (id != -1 && t->vocab_scores[id] > best_score) {
                 // this merge pair exists in vocab! record its score and position
