@@ -154,12 +154,12 @@ endif
 # pull in 140e definitions of common variables:
 #   - <LPP>, <LPI>, <START>, <MEMMAP>, <CFLAGS>
 #   - tool names: <CC>, <OD>, etc
-include $(CS140E_2024_PATH)/libpi/defs.mk
+include $(PI_LLAMA_PATH)/libpi/defs.mk
 
 # if they don't want to override the check makefile.
-ifndef MK_CHK
-    MK_CHK := $(LPP)/mk/Makefile.check-v3
-endif
+# ifndef MK_CHK
+#     MK_CHK := $(LPP)/mk/Makefile.check-v3
+# endif
 
 # hack for running code.
 ifneq ($(RUN),0)
@@ -168,11 +168,6 @@ endif
 
 ###############################################################
 # make all the different target names.
-
-# linker flags
-ifndef LFLAGS
-	LFLAGS :=
-endif
 
 # put all .o from every source in <BUILD_DIR>
 prog_objs := $(patsubst %.c, $(BUILD_DIR)/%.o, $(PROGS))
@@ -287,7 +282,7 @@ endif
 
 $(all_elf): %.elf: %.o %.d $(elf_objs) $(elf_deps) $(LINK_DEPS) $(LIBS)
 	@mkdir -p $(dir $@)
-	$(LD) $(LFLAGS) $(START) $< $(elf_objs) -T $(MEMMAP) -o $@ $(LIBS)
+	$(LD) $(START) $< $(elf_objs) -T $(MEMMAP) -o $@ $(LIBS)
 
 # every .elf gets disassembled into a .list.  use `-D` if
 # you want to see the C source. [Have an option?]
@@ -455,6 +450,7 @@ print:
 	@echo "link_deps    =<$(link_deps)>"
 	@echo "elf_objs    =<$(elf_objs)>"
 	@echo "all_bins    =<$(all_bins)>"
+	@echo "all_elf    =<$(all_elf)>"
 	@#echo "all_tags    =<$(all_tags)>"
 	@echo "----------------- aux vars -----------------";
 	@echo "DEPS         =<$(DEPS)>"

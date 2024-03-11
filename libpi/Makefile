@@ -1,16 +1,20 @@
 # simple definitions for making libpi.a
 #  - you should only ever have to modify SRC or STAFF_OBJS
 
-# to add your gpio.c:
-#   1. copy gpio.c to libpi/src/gpio.c
-#   2. swap the two lines below.
-STAFF_OBJS  +=  ./staff-objs/gpio.o
-# SRC += src/gpio.c
+# c files to compile in /libpi/src
+SRC += src/fat32-helpers.c
+SRC += src/fat32-lfn-helpers.c
+SRC += src/mbr-helpers.c
+SRC += src/pi-sd.c
 
-# you would add the path to yours.
+# object files to link in /libpi/staff-objs
+STAFF_OBJS  +=  ./staff-objs/gpio.o
 STAFF_OBJS  +=  ./staff-objs/uart.o
 STAFF_OBJS  +=  ./staff-objs/gpio-pud.o
-STAFF_OBJS  +=  ./staff-objs/gpio-int.o 
+STAFF_OBJS  +=  ./staff-objs/gpio-int.o
+STAFF_OBJS  +=  ./staff-objs/fat32.o
+STAFF_OBJS  +=  ./staff-objs/mbr.o
+
 
 # you should not have to modify this variable.  
 SRC :=  $(SRC)                              \

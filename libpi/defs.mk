@@ -1,8 +1,8 @@
 # setup useful variables that can be used by make.
 
 # this must be defined in your shell's startup file.
-ifndef PI-LLAMA_PATH
-$(error PI-LLAMA_PATH is not set: this should contain the absolute path to where this directory is.  Define it in your shell's initialiation.  For example, .tcshrc for tcsh or .bashrc for bash)
+ifndef PI_LLAMA_PATH
+$(error PI_LLAMA_PATH is not set: this should contain the absolute path to where this directory is.  Define it in your shell's initialiation.  For example, .tcshrc for tcsh or .bashrc for bash)
 endif
 
 # OPT_LEVEL = -O3
@@ -13,10 +13,10 @@ AS  = $(ARM)-as
 AR = $(ARM)-ar
 OD  = $(ARM)-objdump
 OCP = $(ARM)-objcopy
-PI-LLAMA_LIBPI_PATH = $(PI-LLAMA_PATH)/libpi
-LPP = $(PI-LLAMA_LIBPI_PATH)
+PI_LLAMA_LIBPI_PATH = $(PI_LLAMA_PATH)/libpi
+LPP = $(PI_LLAMA_LIBPI_PATH)
 LPI ?= $(LPP)/libpi.a
-LGCC ?= $(PI-LLAMA_PATH)/lib/libgcc.a
+LGCC ?= $(PI_LLAMA_PATH)/lib/libgcc.a
 
 # let the client override these.
 START ?= $(LPP)/staff-start.o
