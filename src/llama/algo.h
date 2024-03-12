@@ -11,6 +11,7 @@
 
 void rmsnorm(float* o, float* x, float* weight, int size);
 
+void matmulf(float* xout, float* x, float* w, int n, int d);
 void matmulq(float* xout, QuantizedTensor *x, QuantizedTensor *w, int n, int d);
 
 // called in sampler.c::sample
