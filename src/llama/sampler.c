@@ -1,5 +1,7 @@
 // The Sampler, which takes logits and returns a sampled token
 // sampling can be done in a few ways: greedy argmax, sampling, top-p sampling
+#include "rpi.h"
+#include "algo.h"
 
 typedef struct {
     float prob;
@@ -66,7 +68,7 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
             n0++;
         }
     }
-    qsort(probindex, n0, sizeof(ProbIndex), compare);
+    my_qsort(probindex, n0, sizeof(ProbIndex), compare);
 
     // truncate the list where cumulative probability exceeds topp
     float cumulative_prob = 0.0f;

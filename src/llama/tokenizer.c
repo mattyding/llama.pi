@@ -2,6 +2,7 @@
 // implementation ported from llama2.c with some modifications to work with r/pi
 
 #include "rpi.h"
+#include "algo.h"
 
 # define NULL ((void *)0)
 
@@ -19,9 +20,8 @@ typedef struct {
     unsigned char byte_pieces[512]; // stores all single-byte strings
 } Tokenizer;
 
-// --- algo helpers ---
-
-// called in decode
+// --- helper fn ---
+// called in tokenizer.c::decode
 char *parse_raw_byte_token(Tokenizer* t, char *piece) {
     // original code had the following sscanf call:
     //   if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1)...
@@ -45,74 +45,6 @@ char *parse_raw_byte_token(Tokenizer* t, char *piece) {
         piece = (char*)t->byte_pieces + byte_val * 2;
     }
     return piece;
-}
-
-// called in str_lookup
-// src: https://github.com/gcc-mirror/gcc/blob/master/libiberty/bsearch.c
-void * bsearch (const void *key, const void *base0,
-         size_t nmemb, size_t size,
-         int (*compar)(const void *, const void *)) {
-	const char *base = (const char *) base0;
-	int lim, cmp;
-	const void *p;
-
-	for (lim = nmemb; lim != 0; lim >>= 1) {
-		p = base + (lim >> 1) * size;
-		cmp = (*compar)(key, p);
-		if (cmp == 0)
-			return (void *)p;
-		if (cmp > 0) {	/* key > p: move right */
-			base = (const char *)p + size;
-			lim--;
-		} /* else move left */
-	}
-	return NULL;
-}
-
-// basic sorting function implementation
-// qsort import fails ("undefined reference to `__aeabi_uidiv'") so here is a suboptimal but working algo
-// called in encode
-
-#if 0
-void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
-    // personally avoiding kmalloc calls b/c can't free
-    // can potentially lead to horrible memory corruption. unsure... we will see...
-    char *arr = (char *)base;
-    size_t i, j, min_idx;
-    char temp;
-
-    for (i = 0; i < nmemb - 1; i++) {
-        min_idx = i;
-        for (j = i + 1; j < nmemb; j++) {
-            if (compar(arr + j * size, arr + min_idx * size) < 0) {
-                min_idx = j;
-            }
-        }
-        if (min_idx != i) {
-            // Swap elements at i and min_idx
-            for (j = 0; j < size; j++) {
-                temp = arr[i * size + j];
-                arr[i * size + j] = arr[min_idx * size + j];
-                arr[min_idx * size + j] = temp;
-            }
-        }
-    }
-}
-#endif
-
-// backup qsort with malloc
-void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
-    char *arr = (char *)base;
-    char *temp = kmalloc(size);
-    for (size_t i = 0; i < nmemb - 1; i++) {
-        for (size_t j = i + 1; j < nmemb; j++) {
-            if (compar(arr + i * size, arr + j * size) > 0) {
-                memcpy(temp, arr + i * size, size);
-                memcpy(arr + i * size, arr + j * size, size);
-                memcpy(arr + j * size, temp, size);
-            }
-        }
-    }
 }
 
 // --- tokenizer functions ---
@@ -181,7 +113,7 @@ char* decode(Tokenizer* t, int prev_token, int token) {
 int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
     // efficiently find the perfect match for str in vocab, return its index or -1 if not found
     TokenIndex tok = { .str = str }; // acts as the key to search for
-    TokenIndex *res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
+    TokenIndex *res = my_bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
     return res != NULL ? res->id : -1;
 }
 
@@ -197,7 +129,7 @@ void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *
             t->sorted_vocab[i].str = t->vocab[i];
             t->sorted_vocab[i].id = i;
         }
-        qsort(t->sorted_vocab, t->vocab_size, sizeof(TokenIndex), compare_tokens);
+        my_qsort(t->sorted_vocab, t->vocab_size, sizeof(TokenIndex), compare_tokens);
     }
 
     // create a temporary buffer that will store merge candidates of always two consecutive tokens

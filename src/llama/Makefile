@@ -1,9 +1,10 @@
 BOOTLOADER = my-install
 
-O = $(PI_LLAMA_PATH)/libpi
+COMMON_SRC += util.c
+COMMON_SRC += algo.c
+COMMON_SRC += quant.c
 
-# PROGS += $(wildcard *.c)
-PROGS += run.c
+PROGS += runq-seg.c
 
 # define this if you need to give the device for your pi
 TTYUSB = 
@@ -12,18 +13,20 @@ TTYUSB =
 RUN = 1
 
 LIBS += $(PI_LLAMA_PATH)/lib/libm.a
-# LIBS += $(PI_LLAMA_PATH)/lib/libc.a
+LIBS += $(PI_LLAMA_PATH)/lib/libc.a
 LIBS += $(PI_LLAMA_PATH)/lib/libgcc.a
 
-# semihosting (https://stackoverflow.com/questions/19419782/exit-c-text0x18-undefined-reference-to-exit-when-using-arm-none-eabi-gcc)
+# # semihosting (https://stackoverflow.com/questions/19419782/exit-c-text0x18-undefined-reference-to-exit-when-using-arm-none-eabi-gcc)
 CFLAGS += --specs=nosys.specs
-CFLAGS += -ffreestanding
-# LFLAGS += -ffreestanding	# don't think these are necessary
-LFLAGS += -nostdlib 
-# LFLAGS += -shared			# ffreestanding requires shared
+# -fno-math-errno doesn't work
+# -ffreestanding, -nostdlib already included
 
-# link to math functions
-CFLAGS += -lm -lgcc
+# # link to math functions
+CFLAGS += -lm -lc -lgcc
+
+# external-code dir
+CFLAGS  += -Iexternal-code
+COMMON_SRC += external-code/unicode-utf8.c external-code/emmc.c external-code/mbox.c 
 
 include $(PI_LLAMA_PATH)/libpi/mk/Makefile.robust
 
