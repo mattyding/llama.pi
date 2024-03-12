@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define HEAD_IDX 0  // the single head we use for attention
+
 
 void malloc_layer_weights(Config *p, qLayerWeights *weights) {
     int dim = p->dim;
@@ -22,14 +24,14 @@ void malloc_layer_weights(Config *p, qLayerWeights *weights) {
     weights->attention_norm_weight = kmalloc(dim * sizeof(float));
     weights->ffn_norm_weight = kmalloc(dim * sizeof(float));
     // attn weights
-    weights->wq.q = kmalloc(dim * (p->n_heads * head_size) * sizeof(int8_t));
-    weights->wq.s = kmalloc((dim * p->n_heads) * sizeof(float));
-    weights->wk.q = kmalloc(dim * (p->n_kv_heads * head_size) * sizeof(int8_t));
-    weights->wk.s = kmalloc((dim * p->n_kv_heads) * sizeof(float));
-    weights->wv.q = kmalloc(dim * (p->n_kv_heads * head_size) * sizeof(int8_t));
-    weights->wv.s = kmalloc((dim * p->n_kv_heads) * sizeof(float));
-    weights->wo.q = kmalloc((p->n_heads * head_size) * dim * sizeof(int8_t));
-    weights->wo.s = kmalloc((p->n_heads * dim) * sizeof(float));
+    weights->wq.q = kmalloc(head_size * sizeof(int8_t));
+    weights->wq.s = kmalloc(sizeof(float));
+    weights->wk.q = kmalloc(kv_dim * head_size * sizeof(int8_t));
+    weights->wk.s = kmalloc(kv_dim * sizeof(float));
+    weights->wv.q = kmalloc(kv_dim * head_size * sizeof(int8_t));
+    weights->wv.s = kmalloc(kv_dim * sizeof(float));
+    weights->wo.q = kmalloc(head_size * dim * sizeof(int8_t));
+    weights->wo.s = kmalloc(head_size * dim * sizeof(float));
     // ffn weights
     weights->w1.q = kmalloc(dim * hidden_dim * sizeof(int8_t));
     weights->w1.s = kmalloc(dim * hidden_dim * sizeof(float));
@@ -61,12 +63,9 @@ void malloc_run_state(Config *p, qRunState *s) {
     s->v = kmalloc(kv_dim * sizeof(float));
     s->att = kmalloc(p->n_heads * p->seq_len * sizeof(float));
     s->logits = kmalloc(p->vocab_size * sizeof(float));
-    s->key_cache = kmalloc(p->n_layers * p->seq_len * kv_dim * sizeof(float));
-    s->value_cache = kmalloc(p->n_layers * p->seq_len * kv_dim * sizeof(float));
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
-     || !s->k || !s->v || !s->att || !s->logits || !s->key_cache
-     || !s->value_cache) {
+     || !s->k || !s->v || !s->att || !s->logits) {
         panic("issue with initializing runstate\n");
     }
 }
@@ -87,7 +86,7 @@ void load_layer_weights(Config *p, fat32_fs_t *fs, pi_dirent_t *weight_dir, int 
     int dim = p->dim;
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     int head_size = dim / p->n_heads;
-    int hidden_dim = p->hidden_dim;\
+    int hidden_dim = p->hidden_dim;
 
     char *layer_ptr = read_file(fs, weight_dir, "layer%d.bin");
     // first byte is the magic number (0xak80)
@@ -102,10 +101,11 @@ void load_layer_weights(Config *p, fat32_fs_t *fs, pi_dirent_t *weight_dir, int 
     memcpy(weights->ffn_norm_weight, layer_ptr, p->dim * sizeof(float));
     layer_ptr += p->dim * sizeof(float);
     // now the quantized weights. first set are attn, then ffn
-    load_quantized_tensor(&layer_ptr, weights->wq.q, weights->wq.s, dim * (p->n_heads * head_size));
-    load_quantized_tensor(&layer_ptr, weights->wk.q, weights->wk.s, dim * (p->n_kv_heads * head_size));
-    load_quantized_tensor(&layer_ptr, weights->wv.q, weights->wv.s, dim * (p->n_kv_heads * head_size));
-    load_quantized_tensor(&layer_ptr, weights->wo.q, weights->wo.s, (p->n_heads * head_size) * dim);
+    load_quantized_tensor(&layer_ptr, weights->wq.q, weights->wq.s, head_size);
+    load_quantized_tensor(&layer_ptr, weights->wk.q + (HEAD_IDX / p->n_kv_heads) * head_size, weights->wk.s + (HEAD_IDX / p->n_kv_heads), head_size);
+    load_quantized_tensor(&layer_ptr, weights->wv.q + (HEAD_IDX / p->n_kv_heads) * head_size, weights->wv.s + (HEAD_IDX / p->n_kv_heads), head_size);
+    load_quantized_tensor(&layer_ptr, weights->wo.q + HEAD_IDX * head_size, weights->wo.s + HEAD_IDX * head_size, head_size * dim);
+
     load_quantized_tensor(&layer_ptr, weights->w1.q, weights->w1.s, dim * hidden_dim);
     load_quantized_tensor(&layer_ptr, weights->w2.q, weights->w2.s, hidden_dim * dim);
     load_quantized_tensor(&layer_ptr, weights->w3.q, weights->w3.s, dim * hidden_dim);
@@ -175,49 +175,40 @@ float* forwardq(Config *p, int token, int pos) {
             }
         }
 
-        // save key,value at this time step (pos) to our kv cache
-        int loff = l * p->seq_len * kv_dim; // kv cache layer offset for convenience
-        float* key_cache_row = s->key_cache + loff + pos * kv_dim;
-        float* value_cache_row = s->value_cache + loff + pos * kv_dim;
-        memcpy(key_cache_row, s->k, kv_dim * sizeof(*key_cache_row));
-        memcpy(value_cache_row, s->v, kv_dim * sizeof(*value_cache_row));
+        // single-head attention
+        // get the query vector
+        float* q = s->q;
+        // attention scores
+        float* att = s->att;
 
-        // multihead attention. iterate over all heads
-        int h;
-        for (h = 0; h < p->n_heads; h++) {
-            // get the query vector for this head
-            float* q = s->q + h * head_size;
-            // attention scores for this head
-            float* att = s->att + h * p->seq_len;
-            // iterate over all timesteps, including the current one
-            for (int t = 0; t <= pos; t++) {
-                // get the key vector for this head and at this timestep
-                float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-                // calculate the attention score as the dot product of q and k
-                float score = 0.0f;
-                for (int i = 0; i < head_size; i++) {
-                    score += q[i] * k[i];
-                }
-                score /= sqrtf(head_size);
-                // save the score to the attention buffer
-                att[t] = score;
+        // iterate over all timesteps, including the current one
+        for (int t = 0; t <= pos; t++) {
+            // get the key vector at this timestep
+            float* k = s->k + t * kv_dim;
+            // calculate the attention score as the dot product of q and k
+            float score = 0.0f;
+            for (int i = 0; i < kv_dim; i++) {
+                score += q[i] * k[i];
             }
+            score /= sqrtf(kv_dim);
+            // save the score to the attention buffer
+            att[t] = score;
+        }
 
-            // softmax the scores to get attention weights, from 0..pos inclusively
-            softmax(att, pos + 1);
+        // softmax the scores to get attention weights, from 0..pos inclusively
+        softmax(att, pos + 1);
 
-            // weighted sum of the values, store back into xb
-            float* xb = s->xb + h * head_size;
-            memset(xb, 0, head_size * sizeof(float));
-            for (int t = 0; t <= pos; t++) {
-                // get the value vector for this head and at this timestep
-                float* v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
-                // get the attention weight for this timestep
-                float a = att[t];
-                // accumulate the weighted value into xb
-                for (int i = 0; i < head_size; i++) {
-                    xb[i] += a * v[i];
-                }
+        // weighted sum of the values, store back into xb
+        float* xb = s->xb;
+        memset(xb, 0, dim * sizeof(float));
+        for (int t = 0; t <= pos; t++) {
+            // get the value vector at this timestep
+            float* v = s->v + t * kv_dim;
+            // get the attention weight for this timestep
+            float a = att[t];
+            // accumulate the weighted value into xb
+            for (int i = 0; i < kv_dim; i++) {
+                xb[i] += a * v[i];
             }
         }
 
