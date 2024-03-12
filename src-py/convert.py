@@ -1,7 +1,5 @@
 # modification of export.py that splits into multiple files
 import os
-import gzip
-import shutil
 import struct
 import argparse
 import json
@@ -59,6 +57,95 @@ def quantize_q80(w, group_size):
 
 
 # --- export fns
+def fp32_export(model, out_dir, group_size=64):
+    """
+    Export FP32 model weights into .bin files to be read from C. Each layer is exported into a separate file.
+       That is:
+       - all tensors are exported in fp32
+    File format:
+    - header: 320 bytes
+        - magic: uint32 of "ak32" in ASCII
+        - version: int
+        - params: 7 ints
+            - dim
+            - hidden_dim
+            - n_layers
+            - n_heads
+            - n_kv_heads
+            - vocab_size
+            - max_seq_len
+        - shared_classifier: int
+    """
+    version = 1
+    magic = 0x616B3332
+
+    os.makedirs(out_dir, exist_ok=True)
+    # write config file
+    with open(out_dir + "/config.bin", "wb+") as f:
+        # 36-byte header
+        # 1) write magic
+        f.write(struct.pack("I", magic))
+        # 2) write version, which will be int
+        f.write(struct.pack("i", version))
+        # 3) write the params, which will be 7 ints
+        p = model.params
+        hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
+        n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
+        header = struct.pack(
+            "iiiiiii",
+            p.dim,
+            hidden_dim,
+            p.n_layers,
+            p.n_heads,
+            n_kv_heads,
+            p.vocab_size,
+            p.max_seq_len,
+        )
+        f.write(header)
+
+    # write token embedding table
+    with open(out_dir + "/tok_emb.bin", "wb+") as f:
+        print("writing tok_emb.bin")
+        # 4-byte header: magic
+        f.write(struct.pack("I", magic))
+        # token embedding table
+        serialize_fp32(f, model.tok_embeddings.weight)
+
+    # write the weights for each layer into a separate .bin file
+    for i, layer in enumerate(model.layers):
+        print(f"writing layer {i}.bin")
+        with open(f"{out_dir}/layer{i}.bin", "wb+") as f:
+            # 8-byte header
+            # 1) magic
+            f.write(struct.pack("I", magic))
+            # 2) layer id: int
+            f.write(struct.pack("i", i))
+
+            # model weights
+            serialize_fp32(f, layer.attention_norm.weight)
+            serialize_fp32(f, layer.ffn_norm.weight)
+            serialize_fp32(f, layer.attention.wq.weight)
+            serialize_fp32(f, layer.attention.wk.weight)
+            serialize_fp32(f, layer.attention.wv.weight)
+            serialize_fp32(f, layer.attention.wo.weight)
+            serialize_fp32(f, layer.feed_forward.w1.weight)
+            serialize_fp32(f, layer.feed_forward.w2.weight)
+            serialize_fp32(f, layer.feed_forward.w3.weight)
+
+    # write the output weights
+    with open(f"{out_dir}/output.bin", "wb+") as f:
+        # 4-byte header: magic
+        f.write(struct.pack("I", magic))
+        serialize_fp32(f, model.output.weight)
+
+    # write final rmsnorm weights
+    with open(f"{out_dir}/norm.bin", "wb+") as f:
+        print("writing norm.bin")
+        # 4-byte header: magic
+        f.write(struct.pack("I", magic))
+        serialize_fp32(f, model.norm.weight)
+
+
 def q80_export(model, out_dir, group_size=64):
     """
     Export Q8_0 model weights into .bin files to be read from C. Each layer is exported into a separate file.
@@ -67,10 +154,22 @@ def q80_export(model, out_dir, group_size=64):
        - all other tensors (the rmsnorm params) are kept and exported in fp32
        - quantization is done in groups of group_size to reduce the effects of any outliers
     File format:
-    - header: 8 bytes
-        - magic: uint32 of "ak80" in ASCII
+    - header: 352 bytes
+        - magic: uint32 of "0x80" in ASCII
+        - version: int
+        - params: 7 ints
+            - dim
+            - hidden_dim
+            - n_layers
+            - n_heads
+            - n_kv_heads
+            - vocab_size
+            - max_seq_len
+        - shared_classifier: int
+        - group_size: int
     """
     version = 2
+    magic = 0x616B3830
 
     # let's first do some validation for this export type
     while model.params.dim % group_size != 0:
@@ -81,8 +180,9 @@ def q80_export(model, out_dir, group_size=64):
     os.makedirs(out_dir, exist_ok=True)
     # write config file
     with open(out_dir + "/config.bin", "wb+") as f:
+        # 44-byte header
         # 1) write magic, which will be uint32 of "ak80" in ASCII
-        f.write(struct.pack("I", 0x616B3830))
+        f.write(struct.pack("I", magic))
         # 2) write version, which will be int
         f.write(struct.pack("i", version))
         # 3) write the params, which will be 7 ints
@@ -104,10 +204,19 @@ def q80_export(model, out_dir, group_size=64):
         f.write(struct.pack("i", int(shared_classifier)))
         f.write(struct.pack("i", group_size))  # group size used for quantization
 
+    # write token embedding table
+    with open(out_dir + "/tok_emb.bin", "wb+") as f:
+        print("writing tok_emb.bin")
+        # 4-byte header: magic
+        f.write(struct.pack("I", magic))
+        # 2) write the token embedding table
+        serialize_fp32(f, model.tok_embeddings.weight)
+
     ew = []
 
     # write the weights for each layer into a separate .bin file
     for i, layer in enumerate(model.layers):
+        print(f"writing layer {i}.bin")
         # quantize weights
         q80_wq, scale_wq, maxerr_wq = quantize_q80(
             layer.attention.wq.weight, group_size
@@ -132,13 +241,11 @@ def q80_export(model, out_dir, group_size=64):
         )
         # write to file
         with open(f"{out_dir}/layer{i}.bin", "wb+") as f:
-            # 16-byte header
-            # 1) magic: uint32 of "ak80" in ASCII
-            f.write(struct.pack("I", 0x616B3830))
+            # 8-byte header
+            # 1) magic
+            f.write(struct.pack("I", magic))
             # 2) layer id: int
             f.write(struct.pack("i", i))
-            # 3) padding: 8 bytes
-            f.write(b"\0" * 8)
 
             # fp32 weights
             serialize_fp32(f, layer.attention_norm.weight)
@@ -169,9 +276,9 @@ def q80_export(model, out_dir, group_size=64):
             ew.append((maxerr_ff3, layer.feed_forward.w3.weight.shape))
 
             # logging
-            print(
-                f"Layer {i}: max errors: wq={maxerr_wq}, wk={maxerr_wk}, wv={maxerr_wv}, wo={maxerr_wo}, ff1={maxerr_ff1}, ff2={maxerr_ff2}, ff3={maxerr_ff3}"
-            )
+            # print(
+            #     f"Layer {i}: max errors: wq={maxerr_wq}, wk={maxerr_wk}, wv={maxerr_wv}, wo={maxerr_wo}, ff1={maxerr_ff1}, ff2={maxerr_ff2}, ff3={maxerr_ff3}"
+            # )
 
     # write the output weights
     if not shared_classifier:
@@ -179,11 +286,9 @@ def q80_export(model, out_dir, group_size=64):
             model.output.weight, group_size
         )
         with open(f"{out_dir}/output.bin", "wb+") as f:
-            # 16-byte header
-            # 1) magic: uint32 of "ak80" in ASCII
-            f.write(struct.pack("I", 0x616B3830))
-            # 2) padding: 12 bytes
-            f.write(b"\0" * 12)
+            # 4-byte header: magic
+            f.write(struct.pack("I", magic))
+
             serialize_fp32(f, model.output.weight)
             serialize_int8(f, q80_output)
             serialize_fp32(f, scale_output)
@@ -191,11 +296,9 @@ def q80_export(model, out_dir, group_size=64):
 
     # write final rmsnorm weights
     with open(f"{out_dir}/norm.bin", "wb+") as f:
-        # 16-byte header
-        # 1) magic: uint32 of "ak80" in ASCII
-        f.write(struct.pack("I", 0x616B3830))
-        # 2) padding: 12 bytes
-        f.write(b"\0" * 12)
+        print("writing norm.bin")
+        # 4-byte header: magic
+        f.write(struct.pack("I", magic))
         serialize_fp32(f, model.norm.weight)
 
     # print the highest error across all weights, should be very small, e.g. O(~0.001)
