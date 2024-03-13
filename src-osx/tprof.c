@@ -1,10 +1,4 @@
-#include <stdio.h>
-#include <x86intrin.h>
-#include <time.h>
-
-static unsigned long long start_tsc, end_tsc;
-static unsigned long long (*orig_func)(void);
-static struct timespec start_time, end_time;
+#include "prof.h"
 
 void start_timer(void) {
     start_tsc = __rdtsc();
@@ -16,22 +10,26 @@ void stop_timer(void) {
     clock_gettime(CLOCK_MONOTONIC, &end_time);
 }
 
-void print_time_elapsed(void) {
+void reset_timer(void) {
+    start_tsc = 0;
+    end_tsc = 0;
+    start_time.tv_sec = 0;
+    start_time.tv_nsec = 0;
+    end_time.tv_sec = 0;
+    end_time.tv_nsec = 0;
+}
+
+void print_time_elapsed(char * msg, int num_tokens) {
     unsigned long long elapsed_cycles = end_tsc - start_tsc;
     long long elapsed_us = (end_time.tv_sec - start_time.tv_sec) * 1000000LL +
                           (end_time.tv_nsec - start_time.tv_nsec) / 1000;
-    printf("Elapsed cycles: %llu\n", elapsed_cycles);
-    printf("Elapsed time: %lld us\n", elapsed_us);
-    int num_tokens = 3;
-    printf("(cycs/token): %f\n", (float)elapsed_cycles / num_tokens);
-    printf("(us/token): %f us\n", (float)elapsed_us / num_tokens);
+    if (msg) {
+        printf("%s\n", msg);
+    }
+    printf("\tElapsed cycles: %llu\n", elapsed_cycles);
+    printf("\tElapsed time: %lld us\n", elapsed_us);
+    if (num_tokens > 0) {
+        printf("\t(cyc/token): %f\n", (float)elapsed_cycles / num_tokens);
+        printf("\t(us/token): %f us\n", (float)elapsed_us / num_tokens);
+    }
 }
-
-// example usage
-// #include "tprof.h"
-// int main() {
-//     start_timer();
-//     // do something
-//     stop_timer();
-//     print_time_elapsed();
-// }
