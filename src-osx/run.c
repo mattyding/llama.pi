@@ -5,15 +5,17 @@
 #include "fileutils.h"
 #include "prof.h"
 #include "transformer.h"
-#include "forward.c"
 #include "sampler.c"
 #include "tokenizer.c"
+#include "forward.c"
+#include "forwardq.c"
 
 
 // experiment parameters
 char *prompt = "hello world";
 char *checkpoint_path = NULL;  // e.g. out/model.bin
 int use_forwardSeg = 0;        // 1 if use forwardSeg or 0 if use forward
+int use_quantize = 1;              // 1 if use int8 quantization or 0 if use fp32
 
 float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
 float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
@@ -32,18 +34,37 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
 
     TransformerWeights fw;
     LayerWeights lw;
-
-    if (!use_forwardSeg) {
-        printf("Loading full weights\n");
-        load_full_weights_fp32(config, &fw);
-    } else {
-        // load weights for an individual transformer layer
-        // does not allocate additional memory; assumes malloc already done
-        printf("Loading weights in segments\n");
-        malloc_layer_weights(config, &lw);
-    }
     RunState s;
-    malloc_run_state(config, &s);
+
+    qTransformerWeights qw;
+    qRunState qs;
+    
+    if (use_quantize) {
+        load_full_weights_q80(config, &qw);
+    
+        malloc_qrun_state(config, &qs);
+    } else {
+
+        start_timer();
+        if (!use_forwardSeg) {
+            printf("Loading full weights\n");
+            load_full_weights_fp32(config, &fw);
+        } else {
+            // load weights for an individual transformer layer
+            // does not allocate additional memory; assumes malloc already done
+            printf("Loading weights in segments\n");
+            malloc_layer_weights(config, &lw);
+        }
+        stop_timer();
+        print_time_elapsed("Weights load:", 0);
+
+        start_timer();
+        malloc_run_state(config, &s);
+        stop_timer();
+        print_time_elapsed("RunState malloc:", 0);
+    }
+
+    start_timer();
 
     // start the main loop
     long start = 0;  // used to time our code, only initialized after first iteration
@@ -53,10 +74,17 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
     float *logits;
     while (pos < steps) {
         // forward the transformer to get logits for the next token
-        if (use_forwardSeg)
-            logits = forwardSeg(config, &lw, &s, token, pos);
-        else
-            logits = forward(config, &fw, &s, token, pos);
+        if (use_quantize) {
+            if (use_forwardSeg)
+                ; // logits = forwardSegq(config, &qw, &s, token, pos);
+            else
+                logits = forwardq(config, &qw, &qs, token, pos);
+        } else {
+            if (use_forwardSeg)
+                logits = forwardSeg(config, &lw, &s, token, pos);
+            else
+                logits = forward(config, &fw, &s, token, pos);
+        }
 
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
@@ -78,7 +106,10 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
         token = next;
 
         // init the timer here because the first iteration can be slower
-        if (start == 0) { start_timer(); }
+        // if (start == 0) { start_timer(); }
+        stop_timer();
+        print_time_elapsed("Time to generate one token:", 1);
+        reset_timer();
         printf("fwd %d: ", pos);
         print_mem_prof(NULL);
     }
@@ -96,13 +127,24 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
 }
 
 int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: %s <use_forwardSeg> <use_quantize>\n", argv[0]);
+        return 1;
+    }
     use_forwardSeg = atoi(argv[1]);
+    use_quantize = atoi(argv[2]);
 
     Config config;
     start_timer();
     read_config(config_fp32_path, &config);
     stop_timer();
     print_time_elapsed("Config load:", 0);
+    // sanity check config (we know values for llama)
+    if (config.dim != 4096 || config.n_heads != 32 || config.n_layers != 32 || config.vocab_size < 0) {
+        fprintf(stderr, "Sanity check failed for Llama config\n");
+        exit(EXIT_FAILURE);
+    }
+
 
     // build the Tokenizer via the tokenizer .bin file
     Tokenizer tokenizer;

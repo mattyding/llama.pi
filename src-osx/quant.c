@@ -36,17 +36,17 @@ void quantize(QuantizedTensor *qx, float* x, int n) {
 }
 
 /* initialize `n` x quantized tensor (with `size_each` elements), starting from memory pointed at *ptr */
-// QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each) {
-//     void *p = *ptr;
-//     QuantizedTensor *res = malloc(n * sizeof(QuantizedTensor));
-//     for(int i=0; i<n; i++) {
-//         /* map quantized int8 values*/
-//         res[i].q = (int8_t*)p;
-//         p = (int8_t*)p + size_each;
-//         /* map scale factors */
-//         res[i].s = (float*)p;
-//         p = (float*)p + size_each / GS;
-//     }
-//     *ptr = p; // advance ptr to current position
-//     return res;
-// }
+QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each) {
+    void *p = *ptr;
+    QuantizedTensor *res = malloc(n * sizeof(QuantizedTensor));
+    for(int i=0; i<n; i++) {
+        /* map quantized int8 values*/
+        res[i].q = (int8_t*)p;
+        p = (int8_t*)p + size_each;
+        /* map scale factors */
+        res[i].s = (float*)p;
+        p = (float*)p + size_each / GS;
+    }
+    *ptr = p; // advance ptr to current position
+    return res;
+}

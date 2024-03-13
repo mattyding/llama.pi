@@ -323,6 +323,32 @@ def q80_export(model, out_dir, group_size=64):
         f.write(struct.pack("I", magic))
         serialize_fp32(f, model.norm.weight)
 
+    # full_weights.bin contains all weights in one file
+    # this is inefficient because we serialize everything twice but i'm too busy at this point to clean this up
+    weights = [
+        model.tok_embeddings.weight,
+        *[layer.attention.wq.weight for layer in model.layers],
+        *[layer.attention.wk.weight for layer in model.layers],
+        *[layer.attention.wv.weight for layer in model.layers],
+        *[layer.attention.wo.weight for layer in model.layers],
+        *[layer.feed_forward.w1.weight for layer in model.layers],
+        *[layer.feed_forward.w2.weight for layer in model.layers],
+        *[layer.feed_forward.w3.weight for layer in model.layers],
+    ]
+    with open(out_dir + "/full_weights.bin", "wb+") as f:
+        # first let's write out all the params that we are keeping in fp32: the norms
+        for layer in model.layers:  # attention norms
+            serialize_fp32(f, layer.attention_norm.weight)
+        for layer in model.layers:  # MLP norms
+            serialize_fp32(f, layer.ffn_norm.weight)
+        serialize_fp32(f, model.norm.weight)  # final
+        for i, w in enumerate(weights):
+            # quantize this weight
+            q, s, err = quantize_q80(w, group_size)
+            # save the int8 weights to file
+            serialize_int8(f, q)  # save the tensor in int8
+            serialize_fp32(f, s)  # save scale factors
+
     # print the highest error across all weights, should be very small, e.g. O(~0.001)
     ew.sort(reverse=True)
     print(f"max quantization group error across all weights: {ew[0][0]}")

@@ -1,8 +1,10 @@
 // quantization helper functions
 #ifndef __QUANT_OSX_H__
 #define __QUANT_OSX_H__
-#include<math.h>
+
 #include<stdint.h>
+#include <stdlib.h>
+#include<math.h>
 
 static int GS = 64; // group size global for quantization of the weights
 
@@ -13,5 +15,7 @@ typedef struct {
 
 void dequantize(QuantizedTensor *qx, float* x, int n);
 void quantize(QuantizedTensor *qx, float* x, int n);
+
+QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each);
 
 #endif

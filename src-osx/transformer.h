@@ -10,7 +10,7 @@ typedef struct {
     int n_kv_heads; // number of key/value heads (can be < query heads because of multiquery)
     int vocab_size; // vocabulary size, usually 256 (byte-level)
     int seq_len; // max sequence length
-    int shared_classifier;
+    // int shared_classifier;
 } Config;
 
 typedef struct {
