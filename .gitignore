@@ -2,6 +2,7 @@
 
 # perm ignore
 venv/
+models/
 
 # Mac OSX
 **.DS_Store

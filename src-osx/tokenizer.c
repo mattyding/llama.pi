@@ -4,10 +4,6 @@
 #include <string.h>
 #include <ctype.h>
 
-// profilers
-#include "mprof.h"
-#include "tprof.h"
-
 typedef struct {
     char *str;
     int id;
@@ -22,14 +18,11 @@ typedef struct {
     unsigned char byte_pieces[512]; // stores all single-byte strings
 } Tokenizer;
 
-int compare_tokens(const void *a, const void *b) {
+static int compare_tokens(const void *a, const void *b) {
     return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
-void safe_printf(char *piece);
-
-
-void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
+static void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
     // malloc space to hold the scores and the strings
@@ -55,14 +48,14 @@ void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
     fclose(file);
 }
 
-void free_tokenizer(Tokenizer* t) {
+static void free_tokenizer(Tokenizer* t) {
     for (int i = 0; i < t->vocab_size; i++) { free(t->vocab[i]); }
     free(t->vocab);
     free(t->vocab_scores);
     free(t->sorted_vocab);
 }
 
-char* decode(Tokenizer* t, int prev_token, int token) {
+static char* decode(Tokenizer* t, int prev_token, int token) {
     char *piece = t->vocab[token];
     // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
     if (prev_token == 1 && piece[0] == ' ') { piece++; }
@@ -75,7 +68,7 @@ char* decode(Tokenizer* t, int prev_token, int token) {
     return piece;
 }
 
-void safe_printf(char *piece) {
+static void safe_printf(char *piece) {
     // piece might be a raw byte token, and we only want to print printable chars or whitespace
     // because some of the other bytes can be various control codes, backspace, etc.
     if (piece == NULL) { return; }
@@ -89,14 +82,14 @@ void safe_printf(char *piece) {
     printf("%s", piece);
 }
 
-int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
+static int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
     // efficiently find the perfect match for str in vocab, return its index or -1 if not found
     TokenIndex tok = { .str = str }; // acts as the key to search for
     TokenIndex *res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
     return res != NULL ? res->id : -1;
 }
 
-void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
+static void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
     // encode the string text (input) into an upper-bound preallocated tokens[] array
     // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
     if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
@@ -215,24 +208,4 @@ void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *
     if (eos) tokens[(*n_tokens)++] = 2;
 
     free(str_buffer);
-}
-
-int main() {
-    Tokenizer tokenizer;
-    build_tokenizer(&tokenizer, "../models/tokenizer.bin", 32000);
-
-    char *prompt = "hello world";
-    int num_prompt_tokens = 0;
-    int* prompt_tokens = (int*)malloc((strlen(prompt)+3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
-
-    start_timer();
-    encode(&tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
-    stop_timer();
-
-    print_time_elapsed();
-    print_memory_usage();
-
-    free_tokenizer(&tokenizer);
-
-    return 0;
 }

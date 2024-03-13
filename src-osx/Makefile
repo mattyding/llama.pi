@@ -1,20 +1,25 @@
 CC = gcc
+CFLAGS += -g0 -O3 # -lm -ldl -lc
 
-CFLAGS += -g0 -O3 -lm -ldl -lc
+# Common source files
+COMMON_SRCS = algo.c fileutils.c tokenizer.c sampler.c
 
-RUN = 0
+# Profiler sources
+PROF_SRCS = mprof.c tprof.c
 
-all: profiler profilerq
+run: run.o forward.o $(COMMON_SRCS:.c=.o) $(PROF_SRCS:.c=.o)
+	$(CC) $(CFLAGS) -o $@ $^
 
-profilerq: profiler.c prof-runq.c
-	$(CC) -c -o profilerq.o profiler.c
-	$(CC) $(CFLAGS) prof-runq.c profilerq.o -o profilerq
+runq: runq.o forwardq.o quant.o $(COMMON_SRCS:.c=.o) $(PROF_SRCS:.c=.o)
+	$(CC) $(CFLAGS) -o $@ $^
 
-profiler: profiler.c prof-run.c
-	$(CC) -c -o profiler.o profiler.c
-	$(CC) $(CFLAGS) prof-run.c profiler.o -o profiler
 
-.PHONY: clean
+run.o forward.o runq.o forwardq.o quant.o $(COMMON_SRCS:.c=.o): %.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(PROF_SRCS:.c=.o): %.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Clean rule
 clean:
-	rm -f profiler profiler.o
-	rm -f profilerq profiler.o
+	rm -f run runq *.o

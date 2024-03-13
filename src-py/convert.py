@@ -57,7 +57,7 @@ def quantize_q80(w, group_size):
 
 
 # --- export fns
-def fp32_export(model, out_dir, group_size=64):
+def fp32_export(model, out_dir):
     """
     Export FP32 model weights into .bin files to be read from C. Each layer is exported into a separate file.
        That is:
@@ -74,12 +74,13 @@ def fp32_export(model, out_dir, group_size=64):
             - n_kv_heads
             - vocab_size
             - max_seq_len
-        - shared_classifier: int
     """
     version = 1
     magic = 0x616B3332
 
     os.makedirs(out_dir, exist_ok=True)
+    shared_classifier = torch.equal(model.tok_embeddings.weight, model.output.weight)
+
     # write config file
     with open(out_dir + "/config.bin", "wb+") as f:
         # 36-byte header
@@ -102,6 +103,7 @@ def fp32_export(model, out_dir, group_size=64):
             p.max_seq_len,
         )
         f.write(header)
+        f.write(struct.pack("i", int(shared_classifier)))
 
     # write token embedding table
     with open(out_dir + "/tok_emb.bin", "wb+") as f:
@@ -144,6 +146,26 @@ def fp32_export(model, out_dir, group_size=64):
         # 4-byte header: magic
         f.write(struct.pack("I", magic))
         serialize_fp32(f, model.norm.weight)
+
+    # full_weights.bin contains all weights in one file
+    weights = [
+        *[layer.attention_norm.weight for layer in model.layers],
+        *[layer.ffn_norm.weight for layer in model.layers],
+        model.norm.weight,
+        model.tok_embeddings.weight,
+        *[layer.attention.wq.weight for layer in model.layers],
+        *[layer.attention.wk.weight for layer in model.layers],
+        *[layer.attention.wv.weight for layer in model.layers],
+        *[layer.attention.wo.weight for layer in model.layers],
+        *[layer.feed_forward.w1.weight for layer in model.layers],
+        *[layer.feed_forward.w2.weight for layer in model.layers],
+        *[layer.feed_forward.w3.weight for layer in model.layers],
+    ]
+    if not shared_classifier:
+        weights.append(model.output.weight)
+    with open(out_dir + "/full_weights.bin", "wb+") as f:
+        for w in weights:
+            serialize_fp32(f, w)
 
 
 def q80_export(model, out_dir, group_size=64):
@@ -395,12 +417,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, help="model path")
     parser.add_argument("--out_dir", type=str, help="the output dir")
-    parser.add_argument("--version", default=2, type=int, help="v2 == q80")
-    parser.add_argument(
-        "--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32"
-    )
+    parser.add_argument("--version", default=2, type=int, help="v1:=fp32, v2:=q80")
     args = parser.parse_args()
-    dtype = {"fp16": torch.float16, "fp32": torch.float32}[args.dtype]
 
     model = load_meta_model(args.model)
 
@@ -408,5 +426,7 @@ if __name__ == "__main__":
         parser.error("Can't load input model!")
 
     # export
+    if args.version == 1:
+        fp32_export(model, args.out_dir)
     if args.version == 2:
         q80_export(model, args.out_dir)
