@@ -26,6 +26,9 @@ unsigned long long rng_seed = 0; // seed rng with time by default
 char *mode = "generate";    // generate|chat
 char *system_prompt = 0x0; // the (optional) system prompt to use in chat mode
 
+fat32_fs_t fs;
+pi_dirent_t w_dir;
+
 int  generate(Config * p, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
     // encode the (string) prompt into tokens sequence
     // int num_prompt_tokens = 0;
@@ -47,7 +50,7 @@ int  generate(Config * p, Tokenizer *tokenizer, Sampler *sampler, char *prompt, 
     while (pos < steps) {
 
         // forward the transformer to get logits for the next token
-        float* logits = forward(p, token, pos);
+        float* logits = forward(p, &fs, &w_dir, token, pos);
 
         // advance the state state machine
         if (pos < num_prompt_tokens - 1) {
@@ -89,12 +92,11 @@ void notmain() {
     cycle_cnt_init();
 
     // init filesys and cd to model dir
-    fat32_fs_t fs;
     pi_dirent_t root;
-    pi_dirent_t *w_dir = init_fs_cd_model(&fs, &root);
+    w_dir = *init_fs_cd_model(&fs, &root);
 
     // load config
-    int *config_data = (int *)read_file(&fs, w_dir, "CONFIG.BIN");
+    int *config_data = (int *)read_file(&fs, &w_dir, "CONFIG.BIN");
     // first type bytes are magic number (0xak80) and version (2)
     assert(config_data[0] == 0x616B3830);
     assert(config_data[1] == 2);
@@ -103,7 +105,7 @@ void notmain() {
     // config_data[10] := group_size (we assume 64)
 
     // load tokenizer
-    void *tokenizer_data = read_file(&fs, w_dir, "TOKEN~37.BIN");
+    void *tokenizer_data = read_file(&fs, &w_dir, "TOKEN~37.BIN");
     Tokenizer tokenizer;
     printk("Loading tokenizer...\n");
     build_tokenizer(&tokenizer, tokenizer_data, config->vocab_size);

@@ -26,9 +26,6 @@ typedef struct {
     float *v; // value (dim,)
     float *att; // buffer for scores/attention values (n_heads, seq_len)
     float *logits; // output logits
-    // kv cache
-    float* key_cache;   // (layer, seq_len, dim)
-    float* value_cache; // (layer, seq_len, dim)
 } RunState;
 
 typedef struct {
@@ -45,17 +42,28 @@ typedef struct {
     float *v; // value (dim,)
     float *att; // buffer for scores/attention values (n_heads, seq_len)
     float *logits; // output logits
-    // kv cache
-    float* key_cache;   // (layer, seq_len, dim)
-    float* value_cache; // (layer, seq_len, dim)
 } qRunState;
+
+// layerweights
+typedef struct {
+    // holds the weights for an individual transformer layer
+    float* wq; // (dim,  head_size)
+    float* wk; // (dim,  head_size)
+    float* wv; // (dim,  head_size)
+    float* wo; // (head_size, dim)
+    float* w1; // (dim, hidden_dim)
+    float* w2; // (hidden_dim, dim)
+    float* w3; // (dim, hidden_dim)
+    float* attention_norm_weight; // (dim,)
+    float* ffn_norm_weight; // (dim,)
+} LayerWeights;
 
 typedef struct {
     // holds the quantized weights for an individual transformer layer
-    QuantizedTensor wq; // (dim, n_heads * head_size)
-    QuantizedTensor wk; // (dim, n_kv_heads * head_size)
-    QuantizedTensor wv; // (dim, n_kv_heads * head_size)
-    QuantizedTensor wo; // (n_heads * head_size, dim)
+    QuantizedTensor wq; // (dim,  head_size)
+    QuantizedTensor wk; // (dim,  head_size)
+    QuantizedTensor wv; // (dim,  head_size)
+    QuantizedTensor wo; // (head_size, dim)
     QuantizedTensor w1; // (dim, hidden_dim)
     QuantizedTensor w2; // (hidden_dim, dim)
     QuantizedTensor w3; // (dim, hidden_dim)

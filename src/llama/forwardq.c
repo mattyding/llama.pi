@@ -111,7 +111,7 @@ void load_layer_weights(Config *p, fat32_fs_t *fs, pi_dirent_t *weight_dir, int 
     load_quantized_tensor(&layer_ptr, weights->w3.q, weights->w3.s, dim * hidden_dim);
 }
 
-float* forwardq(Config *p, int token, int pos) {
+float* forwardq(Config *p, fat32_fs_t *fs, pi_dirent_t *w_dir, int token, int pos) {
     qRunState* s = NULL;        // compiler doesn't complain
     printk("mallocing run state\n");
     malloc_run_state(p, s);     // set s
@@ -128,14 +128,9 @@ float* forwardq(Config *p, int token, int pos) {
     int hidden_dim =  p->hidden_dim;
     int head_size = dim / p->n_heads;
 
-    // init filesystem
-    fat32_fs_t fs;
-    pi_dirent_t root;
-    pi_dirent_t *w_dir = init_fs_cd_model(&fs, &root);
-
     // load token embedding table
     float *token_embedding_table = kmalloc(p->vocab_size * p->dim * sizeof(float));
-    char *emb_ptr = read_file(&fs, w_dir, "token_embedding_table.bin");
+    char *emb_ptr = read_file(fs, w_dir, "token_embedding_table.bin");
     // first byte is the magic number (0xak80)
     assert(*(int*)emb_ptr == 0x616B3830);
     emb_ptr += 4;
@@ -146,7 +141,7 @@ float* forwardq(Config *p, int token, int pos) {
     // forward all the layers
     for(int l = 0; l < p->n_layers; l++) {
         printk("loading layer %d\n", l);
-        load_layer_weights(p, &fs, w_dir, l, w, s);
+        load_layer_weights(p, fs, w_dir, l, w, s);
         printk("finished with load of layer %d\n", l);
 
         // attention rmsnorm
@@ -252,7 +247,7 @@ float* forwardq(Config *p, int token, int pos) {
 
     // load rms_final_weight from file to w->ffn_norm_weight
     // saves minimal memory by avoiding the malloc call
-    char *rms_final_weight_ptr = read_file(&fs, w_dir, "norm.bin");
+    char *rms_final_weight_ptr = read_file(fs, w_dir, "norm.bin");
     // first byte is the magic number (0xak80)
     assert(*(int*)rms_final_weight_ptr == 0x616B3830);
     rms_final_weight_ptr += 4;
