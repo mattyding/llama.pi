@@ -60,13 +60,13 @@ typedef struct {
 // weights for a single layer
 typedef struct {
     // holds the weights for an individual transformer layer
-    float* wq; // (dim,  head_size)
-    float* wk; // (dim,  head_size)
-    float* wv; // (dim,  head_size)
-    float* wo; // (head_size, dim)
-    float* w1; // (dim, hidden_dim)
-    float* w2; // (hidden_dim, dim)
-    float* w3; // (dim, hidden_dim)
+    float* wq; // (dim,  n_heads * head_size)
+    float* wk; // (dim,  n_kv_heads * head_size)
+    float* wv; // (dim,  n_kv_heads * head_size)
+    float* wo; // (n_heads * head_size, dim)
+    float* w1; // (hidden_dim, dim)
+    float* w2; // (dim, hidden_dim)
+    float* w3; // (hidden_dim, dim)
     float* rms_att_weight; // (dim,)
     float* rms_ffn_weight; // (dim,)
 } LayerWeights;
@@ -74,15 +74,22 @@ typedef struct {
 // quantized weights for a single layer
 typedef struct {
     // holds the weights for an individual transformer layer
-    QuantizedTensor wq; // (dim,  head_size)
-    QuantizedTensor wk; // (dim,  head_size)
-    QuantizedTensor wv; // (dim,  head_size)
-    QuantizedTensor wo; // (head_size, dim)
-    QuantizedTensor w1; // (dim, hidden_dim)
-    QuantizedTensor w2; // (hidden_dim, dim)
-    QuantizedTensor w3; // (dim, hidden_dim)
-    float* rms_att_weight; // (dim,)
-    float* rms_ffn_weight; // (dim,)
+
+    // per layer weights
+    QuantizedTensor *wq; // (dim,  n_heads * head_size)
+    QuantizedTensor *wk; // (dim,  n_kv_heads * head_size)
+    QuantizedTensor *wv; // (dim,  n_kv_heads * head_size)
+    QuantizedTensor *wo; // (n_heads * head_size, dim)
+    QuantizedTensor *w1; // (hidden_dim, dim)
+    QuantizedTensor *w2; // (dim, hidden_dim)
+    QuantizedTensor *w3; // (hidden_dim, dim)
+    float *rms_att_weight; // (dim,)
+    float *rms_ffn_weight; // (dim,)
+
+    // not per layer; load once
+    float *token_embedding_table;    // (vocab_size, dim)
+    float *rms_final_weight; // (dim,)
+    QuantizedTensor *wcls; // (dim, vocab_size)
 } qLayerWeights;
 
 typedef struct {

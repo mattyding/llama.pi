@@ -112,3 +112,52 @@ void load_full_weights_q80(Config *p, qTransformerWeights *w) {
     if (ptr == MAP_FAILED) { fprintf(stderr, "Couldn't map file %s\n", full_weights_q80_path); exit(EXIT_FAILURE); }
     memory_map_qweights(w, p, ptr, shared_classifier);
 }
+
+// stored in tok_emb.bin; not quantized
+// first byte is magic
+// then (vocab_size * dim) floats for the token embedding table
+void load_token_embedding_table(Config *p, qLayerWeights *w) {
+    FILE *file = fopen(tok_embed_q80_path, "rb");
+    if (!file) { fprintf(stderr, "Couldn't open file %s\n", tok_embed_q80_path); exit(EXIT_FAILURE); }
+    // first byte is magic
+    int x;
+    if (fread(&x, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
+    if (x != 0x616B3830) { fprintf(stderr, "magic number mismatch\n"); exit(EXIT_FAILURE); }
+
+    // (vocab_size * dim) floats for the token embedding table
+    // assume already allocated memory
+    if (fread(w->token_embedding_table, sizeof(float), p->vocab_size * p->dim, file) != p->vocab_size * p->dim) { exit(EXIT_FAILURE); }
+    fclose(file);
+}
+
+void load_rms_final_weight(Config *p, qLayerWeights *w) {
+    FILE *file = fopen(rms_final_q80_path, "rb");
+    if (!file) { fprintf(stderr, "Couldn't open file %s\n", rms_final_q80_path); exit(EXIT_FAILURE); }
+    // first byte is magic
+    int x;
+    if (fread(&x, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
+    if (x != 0x616B3830) { fprintf(stderr, "magic number mismatch\n"); exit(EXIT_FAILURE); }
+
+    // (dim * sizeof(float)) bytes for the final rmsnorm weights
+    // assume already allocated memory
+    if (fread(w->rms_final_weight, sizeof(float), p->dim, file) != p->dim) { exit(EXIT_FAILURE); }
+    fclose(file);
+}
+
+// wcls stored at output.bin
+void load_wcls(Config *p, qLayerWeights *w) {
+    // open() and then memmap
+    int file = open(wcls_q80_path, O_RDONLY);
+    if (file == -1) { fprintf(stderr, "Couldn't open file %s\n", wcls_q80_path); exit(EXIT_FAILURE); }
+    // memmap
+    void *ptr = mmap(NULL, sizeof(int) + p->dim * p->vocab_size * sizeof(QuantizedTensor), PROT_READ, MAP_PRIVATE, file, 0);
+    if (ptr == MAP_FAILED) { fprintf(stderr, "Couldn't map file %s\n", wcls_q80_path); exit(EXIT_FAILURE); }
+    close(file);
+    // first byte is magic
+    int x = *(int*)ptr;
+    if (x != 0x616B3830) { fprintf(stderr, "magic number mismatch\n"); exit(EXIT_FAILURE); }
+    ptr += sizeof(int);
+    // increment pointer
+    // load quantized weights
+    load_quantized_tensors(&ptr, w->wcls, 1, p->dim * p->vocab_size);
+}

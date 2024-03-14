@@ -311,10 +311,9 @@ def q80_export(model, out_dir, group_size=64):
             # 4-byte header: magic
             f.write(struct.pack("I", magic))
 
-            serialize_fp32(f, model.output.weight)
             serialize_int8(f, q80_output)
             serialize_fp32(f, scale_output)
-            ew.append((maxerr_output, model.output.weight.shape))
+            # ew.append((maxerr_output, model.output.weight.shape))
 
     # write final rmsnorm weights
     with open(f"{out_dir}/norm.bin", "wb+") as f:

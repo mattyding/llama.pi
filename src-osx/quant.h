@@ -17,5 +17,7 @@ void dequantize(QuantizedTensor *qx, float* x, int n);
 void quantize(QuantizedTensor *qx, float* x, int n);
 
 QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each);
+// same as init but without malloc
+void load_quantized_tensors(void **ptr, QuantizedTensor *res, int n, int size_each);
 
 #endif

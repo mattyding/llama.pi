@@ -10,7 +10,7 @@
 #include "forward.c"
 #include "forwardq.c"
 
-char *out_file_path = "./gen_text.txt";
+char *out_file_path = "../logs/gen_text.txt";
 
 // experiment parameters
 char *prompt = "hello world";
@@ -39,6 +39,7 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
     RunState s;
 
     qTransformerWeights qw;
+    qLayerWeights qlw;
     qRunState qs;
     
     if (!use_quantize) {
@@ -57,8 +58,17 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
 
         malloc_run_state(config, &s);
     } else {
-        load_full_weights_q80(config, &qw);
-        malloc_qrun_state(config, &qs);
+        if (!use_forwardSeg) {
+            load_full_weights_q80(config, &qw);
+            malloc_qrun_state(config, &qs);
+        } else {
+            malloc_qlayer_weights(config, &qlw);
+            // these two sets of weights are not layer-specific so we load them at the beginning
+            load_token_embedding_table(config, &qlw);
+            load_rms_final_weight(config, &qlw);
+            load_wcls(config, &qlw);
+            malloc_qrun_state(config, &qs);
+        }
     }
 
     start_timer();
@@ -71,16 +81,21 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
     float *logits;
     while (pos < steps) {
         // forward the transformer to get logits for the next token
-        if (use_quantize) {
-            if (use_forwardSeg)
-                ; // logits = forwardSegq(config, &qw, &s, token, pos);
-            else
-                logits = forwardq(config, &qw, &qs, token, pos);
-        } else {
-            if (use_forwardSeg)
-                logits = forwardSeg(config, &lw, &s, token, pos);
-            else
+        if (!use_quantize) {
+            if (!use_forwardSeg) {
+                // standard fp32 forward pass
                 logits = forward(config, &fw, &s, token, pos);
+            } else {
+                // warning: poss buggy
+                logits = forwardSeg(config, &lw, &s, token, pos);
+            }
+        } else {
+            if (!use_forwardSeg) {
+                // standard int8 quantized forward pass
+                logits = forwardq(config, &qw, &qs, token, pos);
+            } else {
+                logits = forwardSegq(config, &qlw, &qs, token, pos);
+            }
         }
 
         // advance the state machine
@@ -118,22 +133,27 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
     }
 
     fprintf(out_file, "\n");
-    close(out_file);
+    fclose(out_file);
 
     free(prompt_tokens);
-    if (!quantize) {
+    if (!use_quantize) {
         free_run_state(&s);
         if (use_forwardSeg) {
             free_layer_weights(&lw);
         } else {
-            free_full_weights(&fw);
+            ;
         }
     } else {
         free_qrun_state(&qs);
-        // program terminates w/o free-ing quantized weights;
-        // we hope OS cleans up after us :) 
-        // v bad practice >:( but alas i am on a deadline and debugging free_qtensor is hard
+        if (use_forwardSeg) {
+            free_qlayer_weights(&qlw);
+        } else {
+            free_full_qweights(&qw);
+        }
     }
+    // i think program terminates without freeing some weights
+    // we hope OS cleans up after us :) 
+    // v bad practice >:( but alas i am on a deadline
 }
 
 int main(int argc, char *argv[]) {

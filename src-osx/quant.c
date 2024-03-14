@@ -50,3 +50,25 @@ QuantizedTensor *init_quantized_tensors(void **ptr, int n, int size_each) {
     *ptr = p; // advance ptr to current position
     return res;
 }
+
+// same thing as init but doesn't malloc; assumes you already have the memory
+void load_quantized_tensors(void **ptr, QuantizedTensor *res, int n, int size_each) {
+    void *p = *ptr;
+    for(int i=0; i<n; i++) {
+        /* map quantized int8 values*/
+        res[i].q = (int8_t*)p;
+        p = (int8_t*)p + size_each;
+        /* map scale factors */
+        res[i].s = (float*)p;
+        p = (float*)p + size_each / GS;
+    }
+    *ptr = p; // advance ptr to current position
+}
+
+void free_quantized_tensors(QuantizedTensor *q, int n) {
+    for (int i = 0; i < n; i++) {
+        free(q[i].q);
+        free(q[i].s);
+    }
+    free(q);
+}
