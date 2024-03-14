@@ -82,6 +82,24 @@ static void safe_printf(char *piece) {
     printf("%s", piece);
 }
 
+static void safe_fprintf(FILE *fp, char *piece) {
+    // piece might be a raw byte token, and we only want to print printable chars or whitespace
+    // because some of the other bytes can be various control codes, backspace, etc.
+    if (piece == NULL) {
+        return;
+    }
+    if (piece[0] == '\0') {
+        return;
+    }
+    if (piece[1] == '\0') {
+        unsigned char byte_val = piece[0];
+        if (!(isprint(byte_val) || isspace(byte_val))) {
+            return; // bad byte, don't print it
+        }
+    }
+    fprintf(fp, "%s", piece);
+}
+
 static int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
     // efficiently find the perfect match for str in vocab, return its index or -1 if not found
     TokenIndex tok = { .str = str }; // acts as the key to search for

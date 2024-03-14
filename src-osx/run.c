@@ -10,12 +10,12 @@
 #include "forward.c"
 #include "forwardq.c"
 
+char *out_file_path = "./gen_text.txt";
 
 // experiment parameters
 char *prompt = "hello world";
-char *checkpoint_path = NULL;  // e.g. out/model.bin
-int use_forwardSeg = 0;        // 1 if use forwardSeg or 0 if use forward
-int use_quantize = 1;              // 1 if use int8 quantization or 0 if use fp32
+int use_forwardSeg = 0;     // 1 if use forwardSeg or 0 if use forward
+int use_quantize = 1;       // 1 if use int8 quantization or 0 if use fp32
 
 float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
 float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
@@ -31,6 +31,8 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
         fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
         exit(EXIT_FAILURE);
     }
+    // load out file in append mode
+    FILE *out_file = fopen(out_file_path, "a");
 
     TransformerWeights fw;
     LayerWeights lw;
@@ -39,12 +41,7 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
     qTransformerWeights qw;
     qRunState qs;
     
-    if (use_quantize) {
-        load_full_weights_q80(config, &qw);
-    
-        malloc_qrun_state(config, &qs);
-    } else {
-
+    if (!use_quantize) {
         start_timer();
         if (!use_forwardSeg) {
             printf("Loading full weights\n");
@@ -58,10 +55,10 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
         stop_timer();
         print_time_elapsed("Weights load:", 0);
 
-        start_timer();
         malloc_run_state(config, &s);
-        stop_timer();
-        print_time_elapsed("RunState malloc:", 0);
+    } else {
+        load_full_weights_q80(config, &qw);
+        malloc_qrun_state(config, &qs);
     }
 
     start_timer();
@@ -101,17 +98,15 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
 
         // print the token as string, decode it with the Tokenizer object
         char* piece = decode(tokenizer, token, next);
-        safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
+        safe_fprintf(out_file, piece); // same as fprintf(file, "%s", piece), but skips "unsafe" bytes
         fflush(stdout);
         token = next;
 
         // init the timer here because the first iteration can be slower
         // if (start == 0) { start_timer(); }
         stop_timer();
-        print_time_elapsed("Time to generate one token:", 1);
-        reset_timer();
-        printf("fwd %d: ", pos);
-        print_mem_prof(NULL);
+        printf("generated token %d\n", pos);
+        print_time_elapsed(NULL, pos);
     }
     printf("\n");
 
@@ -122,8 +117,23 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
         print_mem_prof("Total mem usage on forward:");
     }
 
+    fprintf(out_file, "\n");
+    close(out_file);
+
     free(prompt_tokens);
-    free_run_state(&s);
+    if (!quantize) {
+        free_run_state(&s);
+        if (use_forwardSeg) {
+            free_layer_weights(&lw);
+        } else {
+            free_full_weights(&fw);
+        }
+    } else {
+        free_qrun_state(&qs);
+        // program terminates w/o free-ing quantized weights;
+        // we hope OS cleans up after us :) 
+        // v bad practice >:( but alas i am on a deadline and debugging free_qtensor is hard
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -136,7 +146,11 @@ int main(int argc, char *argv[]) {
 
     Config config;
     start_timer();
-    read_config(config_fp32_path, &config);
+    if (!use_quantize) {
+        read_config(config_fp32_path, & config, 0x616B3332, 1);
+    } else {
+        read_config(config_q80_path, &config, 0x616B3830, 2);
+    }
     stop_timer();
     print_time_elapsed("Config load:", 0);
     // sanity check config (we know values for llama)
@@ -144,7 +158,6 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Sanity check failed for Llama config\n");
         exit(EXIT_FAILURE);
     }
-
 
     // build the Tokenizer via the tokenizer .bin file
     Tokenizer tokenizer;

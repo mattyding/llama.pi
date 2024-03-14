@@ -88,7 +88,8 @@ static float* forwardq(Config *p, qTransformerWeights *w, qRunState *s, int toke
     for(int l = 0; l < p->n_layers; l++) {
 
         stop_timer();
-        print_time_elapsed("starting layer", 0);
+        printf("layer %d:\n", l);
+        print_time_elapsed(NULL, 0);
 
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
@@ -162,9 +163,6 @@ static float* forwardq(Config *p, qTransformerWeights *w, qRunState *s, int toke
                 }
             }
         }
-
-        stop_timer();
-        print_time_elapsed("multihead attention", 0);
 
         // final matmul to get the output of the attention
         quantize(&s->xq, s->xb, dim);

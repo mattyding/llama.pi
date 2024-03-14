@@ -1,14 +1,13 @@
 #include "fileutils.h"
 
-void read_config(char* config_path, Config* config) {
+void read_config(char* config_path, Config* config, int magic, int version) {
     FILE *file = fopen(config_path, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", config_path); exit(EXIT_FAILURE); }
-    int magic_number;
-    if (fread(&magic_number, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
-    if (magic_number != 0x616b3332) { fprintf(stderr, "magic number mismatch\n"); exit(EXIT_FAILURE); }
-    int version;
-    if (fread(&version, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
-    if (version != 1) { fprintf(stderr, "version number mismatch\n"); exit(EXIT_FAILURE); }
+    int x;
+    if (fread(&x, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
+    if (x != magic) { fprintf(stderr, "magic number mismatch\n"); exit(EXIT_FAILURE); }
+    if (fread(&x, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
+    if (x != version) { fprintf(stderr, "version number mismatch\n"); exit(EXIT_FAILURE); }
 
     if (fread(&config->dim, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
     printf("config->dim: %d\n", config->dim);
@@ -68,7 +67,7 @@ void load_full_weights_fp32(Config *p, TransformerWeights *w) {
     if (!ptr) { fprintf(stderr, "Couldn't allocate memory for weights\n"); exit(EXIT_FAILURE); }
     if (fread(ptr, file_size, 1, file) != 1) { exit(EXIT_FAILURE); }
     fclose(file);
-    memory_map_weights(w, p, ptr, 1);
+    memory_map_weights(w, p, ptr, shared_classifier);
 }
 
 void memory_map_qweights(qTransformerWeights *w, Config* p, void* ptr, uint8_t shared_classifier) {
@@ -106,10 +105,10 @@ void load_full_weights_q80(Config *p, qTransformerWeights *w) {
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", full_weights_q80_path); exit(EXIT_FAILURE); }
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    float *ptr = (float *)malloc(file_size);
-    if (!ptr) { fprintf(stderr, "Couldn't allocate memory for weights\n"); exit(EXIT_FAILURE); }
-    if (fread(ptr, file_size, 1, file) != 1) { exit(EXIT_FAILURE); }
     fclose(file);
-    memory_map_qweights(w, p, ptr, 1);
+    int fd = open(full_weights_q80_path, O_RDONLY);
+    if (fd == -1) { fprintf(stderr, "Couldn't open file %s\n", full_weights_q80_path); exit(EXIT_FAILURE); }
+    void *ptr = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (ptr == MAP_FAILED) { fprintf(stderr, "Couldn't map file %s\n", full_weights_q80_path); exit(EXIT_FAILURE); }
+    memory_map_qweights(w, p, ptr, shared_classifier);
 }

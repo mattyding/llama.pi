@@ -9,8 +9,12 @@
     #include <sys/mman.h>
 #endif
 
+#include <x86intrin.h>
+#include <time.h>
+
 #include "algo.h"
 #include "transformer.h"
+#include "prof.h"
 
 static void malloc_run_state(Config* p, RunState* s) {
     // we calloc instead of malloc to keep valgrind happy
@@ -89,6 +93,9 @@ static float* forward(Config *p, TransformerWeights *w, RunState *s, int token, 
 
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
+
+        stop_timer();
+        print_time_elapsed("starting layer", 0);
 
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
@@ -194,6 +201,9 @@ static float* forward(Config *p, TransformerWeights *w, RunState *s, int token, 
             x[i] += s->xb[i];
         }
     }
+
+    stop_timer();
+    print_time_elapsed("finished all layers", 0);
 
     // final rmsnorm
     rmsnorm(x, x, w->rms_final_weight, dim);
@@ -319,7 +329,6 @@ static float* forwardSeg(Config *p, LayerWeights *w, RunState *s, int token, int
             }
         }
 
-
         // multihead attention. iterate over all heads
         int h;
         #pragma omp parallel for private(h)
@@ -434,7 +443,7 @@ static float* forwardSeg(Config *p, LayerWeights *w, RunState *s, int token, int
 
     // classifier into logits
     matmulf(s->logits, x, wcls, dim, p->vocab_size);
-
+    
     free_layer_weights(w);
 
     return s->logits;
