@@ -36,6 +36,19 @@ void *calloc(size_t nmemb, size_t size) {
     return ptr;
 }
 
+//memmap wrapper
+void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
+    // resolve the original mmap function if not already done
+    void *(*orig_mmap)(void *addr, size_t length, int prot, int flags, int fd, off_t offset) = dlsym(RTLD_NEXT, "mmap");
+
+    // Allocate memory using the original mmap
+    void *ptr = orig_mmap(addr, length, prot, flags, fd, offset);
+
+    mem += length;
+
+    return ptr;
+}
+
 void reset_mem_prof(void) {
     mem = 0;
 }

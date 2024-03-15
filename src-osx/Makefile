@@ -16,4 +16,4 @@ run: run.o forward.o forwardq.o $(COMMON_SRCS:.c=.o) $(PROF_SRCS:.c=.o)
 
 # Clean rule
 clean:
-	rm -f run runq *.o
+	rm -f run *.o

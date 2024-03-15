@@ -70,6 +70,27 @@ void load_full_weights_fp32(Config *p, TransformerWeights *w) {
     memory_map_weights(w, p, ptr, shared_classifier);
 }
 
+// ptr points to an array of n int8 values and then n floats
+// zeroes out both values if their corresponding bitvector value is 0
+// increment bitvector. assume n is a multiple of 8
+void apply_qpruning(void *ptr, uint8_t **bitvector, int n) {
+    int pruned = 0;
+    int unpruned = 0;
+    int8_t *q = (int8_t*)ptr;
+    float *s = (float*)(q + n);
+    for (int i = 0; i < n; i++) {
+        if ((*bitvector)[i / 8] & (1 << (i % 8))) {
+            unpruned++;
+        } else {
+            q = calloc(1, sizeof(int8_t));
+            s = calloc(1, sizeof(float));
+            pruned++;
+        }
+    }
+    *bitvector += n;
+    printf("pruned: %d, unpruned: %d\n", pruned, unpruned);
+}
+
 void memory_map_qweights(qTransformerWeights *w, Config* p, void* ptr, uint8_t shared_classifier) {
     int head_size = p->dim / p->n_heads;
     // first are the parameters that are kept in fp32 (the rmsnorm (1D) weights)
@@ -98,6 +119,30 @@ void memory_map_qweights(qTransformerWeights *w, Config* p, void* ptr, uint8_t s
     w->w3 = init_quantized_tensors(&ptr, p->n_layers, p->dim * p->hidden_dim);
 
     w->wcls = shared_classifier ? w->q_tokens : init_quantized_tensors(&ptr, 1, p->dim * p->vocab_size);
+
+    if (use_prune) {
+        // load the bitvector
+        FILE *f = fopen(prune_path, "rb");
+        if (!f) { fprintf(stderr, "Couldn't open file %s\n", prune_path); exit(EXIT_FAILURE); }
+        fseek(f, 0, SEEK_END);
+        long file_size = ftell(f);
+        fclose(f);
+        // memmap bitvector
+        int file = open(prune_path, O_RDONLY);
+        if (file == -1) { fprintf(stderr, "Couldn't open file %s\n", prune_path); exit(EXIT_FAILURE); }
+        uint8_t *bitvector = (uint8_t *)mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, file, 0);
+        if (bitvector == MAP_FAILED) { fprintf(stderr, "Couldn't map file %s\n", prune_path); exit(EXIT_FAILURE); }
+        close(file);
+        void *bit_vector_start = bitvector;
+        // apply pruning by anding w1, w2, w3 with bitvector
+        for (int i = 0; i < p->n_layers; i++) {
+            apply_qpruning(w->w1[i].q, &bitvector, p->dim * p->hidden_dim);
+            apply_qpruning(w->w2[i].q, &bitvector, p->hidden_dim * p->dim);
+            apply_qpruning(w->w3[i].q, &bitvector, p->dim * p->hidden_dim);
+        }
+        // munmap
+        munmap(bit_vector_start, file_size);
+    }
 }
 
 void load_full_weights_q80(Config *p, qTransformerWeights *w) {

@@ -16,11 +16,13 @@ char *out_file_path = "../logs/gen_text.txt";
 char *prompt = "hello world";
 int use_forwardSeg = 0;     // 1 if use forwardSeg or 0 if use forward
 int use_quantize = 1;       // 1 if use int8 quantization or 0 if use fp32
+extern int use_prune;       // 1 if using pruned weights, modify in fileutils.h
+int prune_assert = 0;       // use this to check if pruning is set correctly
 
 float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
 float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
 int steps = 256;            // number of steps to run for
-unsigned long long rng_seed = 0; // seed rng with time by default
+unsigned long long rng_seed;
 
 void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
     // encode the (string) prompt into tokens sequence
@@ -71,6 +73,8 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
         }
     }
 
+    print_mem_prof("Memory allocated for weights and run states before forward:");
+
     start_timer();
 
     // start the main loop
@@ -87,7 +91,9 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
                 logits = forward(config, &fw, &s, token, pos);
             } else {
                 // warning: poss buggy
-                logits = forwardSeg(config, &lw, &s, token, pos);
+                // logits = forwardSeg(config, &lw, &s, token, pos);
+                fprintf(stderr, "forwardSeg buggy. don't use at this time.\n");
+                exit(EXIT_FAILURE);
             }
         } else {
             if (!use_forwardSeg) {
@@ -135,23 +141,7 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
     fprintf(out_file, "\n");
     fclose(out_file);
 
-    free(prompt_tokens);
-    if (!use_quantize) {
-        free_run_state(&s);
-        if (use_forwardSeg) {
-            free_layer_weights(&lw);
-        } else {
-            ;
-        }
-    } else {
-        free_qrun_state(&qs);
-        if (use_forwardSeg) {
-            free_qlayer_weights(&qlw);
-        } else {
-            free_full_qweights(&qw);
-        }
-    }
-    // i think program terminates without freeing some weights
+    // free() fns mildly buggy so program terminates without freeing weights
     // we hope OS cleans up after us :) 
     // v bad practice >:( but alas i am on a deadline
 }
@@ -163,6 +153,16 @@ int main(int argc, char *argv[]) {
     }
     use_forwardSeg = atoi(argv[1]);
     use_quantize = atoi(argv[2]);
+
+    if (use_prune != prune_assert) {
+        fprintf(stderr, "prune assert failed. check it is set correctly.\n");
+        exit(EXIT_FAILURE);
+    }
+    rng_seed = __rdtsc();
+    printf("use_forwardSeg: %d\n", use_forwardSeg);
+    printf("use_quantize: %d\n", use_quantize);
+    printf("use_prune: %d\n", use_prune);
+    printf("sampling rng seed: %llu\n", rng_seed);
 
     Config config;
     start_timer();
