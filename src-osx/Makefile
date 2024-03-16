@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS += -g0 -O3 # -lm -ldl -lc
 
 # Common source files
-COMMON_SRCS = algo.c fileutils.c tokenizer.c sampler.c quant.c
+COMMON_SRCS = algo.c fileutils.c tokenizer.c sampler.c quant.c prune.c
 
 # Profiler sources
 PROF_SRCS = mprof.c tprof.c

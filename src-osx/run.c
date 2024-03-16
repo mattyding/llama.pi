@@ -9,15 +9,16 @@
 #include "tokenizer.c"
 #include "forward.c"
 #include "forwardq.c"
+#include "prune.h"
 
-char *out_file_path = "../logs/gen_text.txt";
+char *out_file_path = "../logs/prune_gen_text.txt";
 
 // experiment parameters
 char *prompt = "hello world";
 int use_forwardSeg = 0;     // 1 if use forwardSeg or 0 if use forward
 int use_quantize = 1;       // 1 if use int8 quantization or 0 if use fp32
-extern int use_prune;       // 1 if using pruned weights, modify in fileutils.h
-int prune_assert = 0;       // use this to check if pruning is set correctly
+extern int use_prune;       // 1 if using pruned weights, modify in prune.h
+int prune_assert = 1;       // use this to check if pruning is set correctly
 
 float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
 float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
@@ -103,7 +104,7 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
                 logits = forwardSegq(config, &qlw, &qs, token, pos);
             }
         }
-
+        printf("advancing state machine\n");
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
             // if we are still processing the input prompt, force the next prompt token
@@ -155,10 +156,10 @@ int main(int argc, char *argv[]) {
     use_quantize = atoi(argv[2]);
 
     if (use_prune != prune_assert) {
-        fprintf(stderr, "prune assert failed. check it is set correctly.\n");
+        fprintf(stderr, "prune assert failed. check it is set correctly in prune.h.\n");
         exit(EXIT_FAILURE);
     }
-    rng_seed = __rdtsc();
+    rng_seed = 0; //__rdtsc();
     printf("use_forwardSeg: %d\n", use_forwardSeg);
     printf("use_quantize: %d\n", use_quantize);
     printf("use_prune: %d\n", use_prune);

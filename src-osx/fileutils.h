@@ -12,14 +12,10 @@
 #endif
 
 #include "transformer.h"
+#include "prune.h"
 
 static int shared_classifier = 0;
 
-
-// pruning experiments
-// i think buggy atm. just run in python (exp-prune.py)
-static int use_prune = 0;   // 1 if using pruned weights
-static char *prune_path = "../models/7b-q80/prune/bitvec_l1_unstructured_0.2.bin";    // bitvector
 
 // filepaths
 static char *config_fp32_path = "../models/7b-f32/config.bin";
