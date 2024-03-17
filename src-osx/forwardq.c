@@ -143,14 +143,8 @@ static float* forwardq(Config *p, qTransformerWeights *w, qRunState *s, int toke
     // copy the token embedding into x
     memcpy(x, w->token_embedding_table + token*dim, dim * sizeof(float));
 
-    reset_timer();
-
     // forward all the layers
     for(int l = 0; l < p->n_layers; l++) {
-
-        stop_timer();
-        printf("starting layer %d:\n", l);
-        print_time_elapsed(NULL, 0);
 
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
@@ -262,10 +256,6 @@ static float* forwardq(Config *p, qTransformerWeights *w, qRunState *s, int toke
             x[i] += s->xb[i];
         }
     }
-
-    stop_timer();
-    printf("finished all layers:\n");
-    print_time_elapsed(NULL, 0);
     
     // final rmsnorm
     rmsnorm(x, x, w->rms_final_weight, dim);
@@ -368,10 +358,6 @@ static float* forwardSegq(Config *p, qLayerWeights *qlw, qRunState *s, int token
     // forward all the layers
     // qLayerWeights starts off uninitialized
     for(int l = 0; l < p->n_layers; l++) {
-        stop_timer();
-        printf("layer %d:\n", l);
-        print_time_elapsed(NULL, 0);
-
         load_qlayer_weights(p, l, qlw, &map_start, &file_size);
 
         // attention rmsnorm
@@ -489,9 +475,6 @@ static float* forwardSegq(Config *p, qLayerWeights *qlw, qRunState *s, int token
         // free layer memory
         munmap(map_start, file_size);
     }
-
-    stop_timer();
-    print_time_elapsed("finished all layers", 0);
 
     // final rmsnorm
     rmsnorm(x, x, qlw->rms_final_weight, dim);

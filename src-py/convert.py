@@ -1,4 +1,4 @@
-# modification of export.py that splits into multiple files
+# modification of karpathy's export.py that splits into multiple files
 import os
 import struct
 import argparse

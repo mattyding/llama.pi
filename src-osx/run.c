@@ -11,14 +11,14 @@
 #include "forwardq.c"
 #include "prune.h"
 
-char *out_file_path = "../logs/prune_gen_text.txt";
+char *out_file_path = "../logs/gen_text.txt";
 
 // experiment parameters
 char *prompt = "hello world";
 int use_forwardSeg = 0;     // 1 if use forwardSeg or 0 if use forward
 int use_quantize = 1;       // 1 if use int8 quantization or 0 if use fp32
 extern int use_prune;       // 1 if using pruned weights, modify in prune.h
-int prune_assert = 1;       // use this to check if pruning is set correctly
+int prune_assert = 0;       // use this to check if pruning is set correctly
 
 float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
 float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
@@ -46,7 +46,6 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
     qRunState qs;
     
     if (!use_quantize) {
-        start_timer();
         if (!use_forwardSeg) {
             printf("Loading full weights\n");
             load_full_weights_fp32(config, &fw);
@@ -76,8 +75,6 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
 
     print_mem_prof("Memory allocated for weights and run states before forward:");
 
-    start_timer();
-
     // start the main loop
     long start = 0;  // used to time our code, only initialized after first iteration
     int next;        // will store the next token in the sequence
@@ -104,7 +101,6 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
                 logits = forwardSegq(config, &qlw, &qs, token, pos);
             }
         }
-        printf("advancing state machine\n");
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
             // if we are still processing the input prompt, force the next prompt token
@@ -125,16 +121,15 @@ void generate(Config *config, Tokenizer *tokenizer, Sampler *sampler, char *prom
         token = next;
 
         // init the timer here because the first iteration can be slower
-        // if (start == 0) { start_timer(); }
-        stop_timer();
+        if (start == 0) { start_timer(); start = -1;}
         printf("generated token %d\n", pos);
-        print_time_elapsed(NULL, pos);
     }
     printf("\n");
 
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if (pos > 1) {
         stop_timer();
+        printf("Generated %d tokens in ", pos - 1);
         print_time_elapsed(NULL, pos - 1);
         print_mem_prof("Total mem usage on forward:");
     }
