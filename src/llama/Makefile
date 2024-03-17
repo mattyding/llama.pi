@@ -4,14 +4,15 @@ COMMON_SRC += util.c
 COMMON_SRC += algo.c
 COMMON_SRC += quant.c
 
-PROGS += run-seg.c
+PROGS += benchmark.c	# time operations
+# PROGS += run-seg.c
 # PROGS += runq-seg.c	# quantized version
 
 # define this if you need to give the device for your pi
 TTYUSB = 
 
 # set RUN = 1 if you want the code to automatically run after building.
-RUN = 1
+RUN = 0
 
 LIBS += $(PI_LLAMA_PATH)/lib/libm.a
 LIBS += $(PI_LLAMA_PATH)/lib/libc.a

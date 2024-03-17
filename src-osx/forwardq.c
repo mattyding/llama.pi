@@ -143,14 +143,13 @@ static float* forwardq(Config *p, qTransformerWeights *w, qRunState *s, int toke
     // copy the token embedding into x
     memcpy(x, w->token_embedding_table + token*dim, dim * sizeof(float));
 
-    stop_timer();
-    print_time_elapsed("copying token embedding", 0);
+    reset_timer();
 
     // forward all the layers
     for(int l = 0; l < p->n_layers; l++) {
 
         stop_timer();
-        printf("layer %d:\n", l);
+        printf("starting layer %d:\n", l);
         print_time_elapsed(NULL, 0);
 
         // attention rmsnorm
@@ -265,8 +264,9 @@ static float* forwardq(Config *p, qTransformerWeights *w, qRunState *s, int toke
     }
 
     stop_timer();
-    print_time_elapsed("finished all layers", 0);
-
+    printf("finished all layers:\n");
+    print_time_elapsed(NULL, 0);
+    
     // final rmsnorm
     rmsnorm(x, x, w->rms_final_weight, dim);
 

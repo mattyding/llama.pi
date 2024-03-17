@@ -91,11 +91,15 @@ static float* forward(Config *p, TransformerWeights *w, RunState *s, int token, 
     float* content_row = w->token_embedding_table + token * dim;
     memcpy(x, content_row, dim*sizeof(*x));
 
+    reset_timer();
+
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
 
         stop_timer();
-        print_time_elapsed("starting layer", 0);
+        printf("starting layer %llu:\n", l);
+        print_time_elapsed(NULL, 0);
+        start_timer();
 
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
@@ -203,11 +207,11 @@ static float* forward(Config *p, TransformerWeights *w, RunState *s, int token, 
     }
 
     stop_timer();
-    print_time_elapsed("finished all layers", 0);
+    printf("finished all layers:\n");
+    print_time_elapsed(NULL, 0);
 
     // final rmsnorm
     rmsnorm(x, x, w->rms_final_weight, dim);
-
     // classifier into logits
     matmulf(s->logits, x, w->wcls, p->dim, p->vocab_size);
     return s->logits;
